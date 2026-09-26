@@ -1,0 +1,3 @@
+captures/
+.build/
+tests/live/output/

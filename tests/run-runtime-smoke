@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -u
+
+plugin_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+shell_qml="$plugin_dir/tests/runtime/shell.qml"
+shell_root=/usr/share/omarchy/shell
+
+command -v quickshell >/dev/null 2>&1 || { echo "runtime smoke: quickshell not found" >&2; exit 1; }
+[[ -d $shell_root/Commons ]] || { echo "runtime smoke: Omarchy Commons missing" >&2; exit 1; }
+
+tmp=$(mktemp -d) || exit 1
+trap 'rm -rf "$tmp"' EXIT
+ln -s "$shell_root/Commons" "$tmp/Commons"
+ln -s "$plugin_dir" "$tmp/plugin"
+ln -s "$shell_qml" "$tmp/shell.qml"
+
+log="$tmp/quickshell.log"
+timeout 8 quickshell -p "$tmp/shell.qml" --no-color >"$log" 2>&1
+status=$?
+cat "$log"
+
+if grep -q "OMISSION_RUNTIME_SMOKE_PASS" "$log" \
+    && { [[ $status -eq 0 ]] || [[ $status -eq 124 ]]; }; then
+  echo "runtime smoke: PASS"
+  exit 0
+fi
+
+echo "runtime smoke: PASS marker missing (status $status)" >&2
+exit 1

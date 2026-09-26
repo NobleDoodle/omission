@@ -1,0 +1,29 @@
+name: check
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    container: archlinux:base
+    steps:
+      - name: Install signed Arch test dependencies
+        run: pacman -Syu --noconfirm --needed git nodejs qt6-declarative
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Run deterministic source tests
+        run: node --test tests/*.test.mjs
+      - name: Run strict QML diagnostics
+        run: tests/run-qmllint
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
+      - name: Enforce coverage thresholds
+        run: mise run coverage

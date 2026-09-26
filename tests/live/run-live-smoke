@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ ${WINDOW_SWITCHER_LIVE_TEST:-} != 1 ]]; then
+  echo "live smoke: this opt-in test temporarily controls focus, pointer, workspaces, and keyboard input" >&2
+  echo "rerun only on an idle desktop with WINDOW_SWITCHER_LIVE_TEST=1" >&2
+  exit 64
+fi
+
+plugin_id=io.github.nobledoodle.omission
+for command in cc jq hyprctl omarchy-shell; do
+  command -v "$command" >/dev/null 2>&1 || { echo "live smoke: missing $command" >&2; exit 1; }
+done
+[[ -w /dev/uinput ]] || { echo "live smoke: /dev/uinput is not writable" >&2; exit 1; }
+
+plugin_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
+tmp=$(mktemp -d)
+probe_pid=""
+original_submap=$(hyprctl submap | tr -d '\n')
+[[ $original_submap == default ]] || { echo "live smoke: start from the default submap" >&2; exit 1; }
+original_stable=$(hyprctl -j activewindow | jq -r '.stableId // empty')
+original_workspace=$(hyprctl -j monitors | jq -r '[.[] | select(.focused)][0].activeWorkspace.id')
+focused_monitor=$(hyprctl -j monitors | jq -r '[.[] | select(.focused)][0].id')
+original_cursor_x=$(hyprctl -j cursorpos | jq -r '.x')
+original_cursor_y=$(hyprctl -j cursorpos | jq -r '.y')
+cleanup() {
+  if [[ -n $probe_pid ]]; then kill "$probe_pid" >/dev/null 2>&1 || true; wait "$probe_pid" >/dev/null 2>&1 || true; fi
+  omarchy-shell shell call "$plugin_id" cancel smoke-cleanup >/dev/null 2>&1 || true
+  hyprctl dispatch 'hl.dsp.submap("reset")' >/dev/null 2>&1 || true
+  if [[ $original_workspace =~ ^-?[0-9]+$ ]]; then
+    hyprctl dispatch "hl.dsp.focus({ workspace = \"$original_workspace\" })" >/dev/null 2>&1 || true
+  fi
+  if [[ $original_stable =~ ^[0-9A-Fa-f]+$ ]]; then
+    hyprctl dispatch "hl.dsp.focus({ window = \"stableid:$original_stable\" })" >/dev/null 2>&1 || true
+  fi
+  if [[ $original_cursor_x =~ ^-?[0-9]+([.][0-9]+)?$
+      && $original_cursor_y =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then
+    hyprctl dispatch "hl.dsp.cursor.move({ x = $original_cursor_x, y = $original_cursor_y })" >/dev/null 2>&1 || true
+  fi
+  rm -rf "$tmp"
+}
+trap cleanup EXIT INT TERM
+
+cc -O2 -Wall -Wextra -o "$tmp/alttab-uinput" "$plugin_dir/tests/live/alttab-uinput.c"
+
+status_json() {
+  omarchy-shell shell call "$plugin_id" switcherStatus '' | sed -n '/^{/p' | tail -n 1
+}
+wait_for_open() {
+  local status
+  for _ in $(seq 1 40); do
+    status=$(status_json 2>/dev/null || true)
+    if [[ -n $status ]] && [[ $(jq -r '.open // false' <<<"$status") == true ]]; then
+      printf '%s' "$status"
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "live smoke: switcher did not open" >&2
+  return 1
+}
+wait_for_closed() {
+  local status
+  for _ in $(seq 1 40); do
+    status=$(status_json 2>/dev/null || true)
+    if [[ -n $status ]] && [[ $(jq -r '.open' <<<"$status") == false ]]; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  echo "live smoke: switcher did not close; submap=$(hyprctl submap | tr -d '\n') status=$(status_json)" >&2
+  return 1
+}
+focus_anchor() {
+  hyprctl eval \
+    "hl.dispatch(hl.dsp.focus({ window = \"stableid:$anchor_stable\" })); \
+hl.dispatch(hl.dsp.window.bring_to_top()); \
+hl.dispatch(hl.dsp.cursor.move({ x = $anchor_x, y = $anchor_y }))" >/dev/null
+  sleep 0.1
+}
+run_probe() {
+  "$tmp/alttab-uinput" "$1" &
+  probe_pid=$!
+}
+finish_probe() {
+  wait "$probe_pid"
+  probe_pid=""
+}
+
+test_workspace=$(hyprctl -j clients | jq -r --argjson monitor "$focused_monitor" '
+  ([.[] | select(.monitor == $monitor and .mapped and .acceptsInput and (.hidden | not))]
+    | group_by(.workspace.id)
+    | map(select(length >= 2 and any(.[]; .class == "com.mitchellh.ghostty")))
+    | max_by(length) | .[0].workspace.id) // empty')
+[[ $test_workspace =~ ^-?[0-9]+$ ]] || {
+  echo "live smoke: need two switchable windows on one workspace" >&2
+  exit 1
+}
+hyprctl dispatch "hl.dsp.focus({ workspace = \"$test_workspace\" })" >/dev/null
+sleep 0.2
+anchor_stable=$(hyprctl -j clients | jq -r --argjson workspace "$test_workspace" \
+  --argjson monitor "$focused_monitor" '
+  [.[] | select(.workspace.id == $workspace and .monitor == $monitor
+    and .mapped and .acceptsInput and (.hidden | not)
+    and (.class == "com.mitchellh.ghostty"))][0].stableId // empty')
+[[ $anchor_stable =~ ^[0-9A-Fa-f]+$ ]] || {
+  echo "live smoke: need a Ghostty anchor on the test workspace" >&2
+  exit 1
+}
+anchor_geometry=$(hyprctl -j clients | jq -r --arg stable "$anchor_stable" '
+  [.[] | select(.stableId == $stable)][0] | "\(.at[0] + (.size[0] / 2)) \(.at[1] + (.size[1] / 2))"')
+read -r anchor_x anchor_y <<<"$anchor_geometry"
+[[ $anchor_x =~ ^-?[0-9]+([.][0-9]+)?$
+    && $anchor_y =~ ^-?[0-9]+([.][0-9]+)?$ ]] || {
+  echo "live smoke: invalid anchor geometry" >&2
+  exit 1
+}
+focus_anchor
+
+omarchy-shell shell call "$plugin_id" cancel smoke-start >/dev/null
+hyprctl dispatch 'hl.dsp.submap("reset")' >/dev/null
+
+run_probe forward
+wait_for_open >/dev/null
+sleep 0.4
+forward=$(status_json)
+selected=$(jq -r '.selectedStableId' <<<"$forward")
+[[ $selected =~ ^[0-9A-Fa-f]+$ ]] || { echo "live smoke: no stable selection" >&2; exit 1; }
+finish_probe
+sleep 0.2
+[[ $(hyprctl submap | tr -d '\n') == default ]] || { echo "live smoke: forward left stale submap" >&2; exit 1; }
+forward_active=$(hyprctl -j activewindow | jq -r '.stableId')
+[[ $forward_active == "$selected" ]] || {
+  echo "live smoke: forward selected=$selected active=$forward_active snapshot=$forward" >&2
+  exit 1
+}
+wait_for_closed
+focus_anchor
+
+run_probe reverse
+wait_for_open >/dev/null
+sleep 0.4
+reverse=$(status_json)
+reverse_selected=$(jq -r '.selectedStableId' <<<"$reverse")
+[[ $reverse_selected =~ ^[0-9A-Fa-f]+$ ]] || { echo "live smoke: reverse has no selection" >&2; exit 1; }
+finish_probe
+sleep 0.2
+reverse_active=$(hyprctl -j activewindow | jq -r '.stableId')
+[[ $reverse_active == "$reverse_selected" ]] || {
+  echo "live smoke: reverse selected=$reverse_selected active=$reverse_active snapshot=$reverse" >&2
+  exit 1
+}
+wait_for_closed
+focus_anchor
+
+run_probe escape
+finish_probe
+sleep 0.2
+[[ $(hyprctl submap | tr -d '\n') == default ]] || { echo "live smoke: Escape left stale submap" >&2; exit 1; }
+wait_for_closed
+focus_anchor
+
+run_probe reload
+wait_for_open >/dev/null
+hyprctl reload >/dev/null
+sleep 0.5
+[[ $(hyprctl submap | tr -d '\n') == default ]] || { echo "live smoke: reload left stale submap" >&2; exit 1; }
+[[ $(jq -r '.open' <<<"$(status_json)") == false ]] || { echo "live smoke: reload left overlay open" >&2; exit 1; }
+finish_probe
+
+echo "live smoke: PASS"

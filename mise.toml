@@ -1,0 +1,39 @@
+[tools]
+node = "24"
+
+[tasks.test]
+description = "Run the model, switcher, generated-Lua, QML security, background, and manifest tests"
+run = "node --test tests/*.test.mjs"
+
+[tasks.coverage]
+description = "Run model tests with >=90% line/branch/function coverage enforced on WindowModel.js"
+run = "node --test --experimental-test-coverage --test-coverage-include='**/WindowModel.js' --test-coverage-lines=90 --test-coverage-branches=90 --test-coverage-functions=90 tests/*.test.mjs"
+
+[tasks.lint]
+description = "Run strict QML diagnostics with Omarchy-aware imports"
+run = "tests/run-qmllint"
+
+[tasks.runtime]
+description = "Instantiate the shipped Overlay in the real Quickshell runtime"
+run = "tests/run-runtime-smoke"
+
+[tasks.validate]
+description = "Validate the Omarchy plugin manifest"
+run = "omarchy plugin validate ."
+
+[tasks.check]
+description = "Run every CI-safe repository check"
+depends = ["test", "coverage", "lint", "runtime", "validate"]
+
+[tasks.visual-build]
+description = "Build the Wayland input helper for live interaction tests"
+run = "mkdir -p .build && cc -O2 -Wall -Wextra -Werror -o .build/omission-uinput tests/live/omission-uinput.c"
+
+[tasks.visual-test]
+description = "Exercise Omission interactions and generate visual evidence"
+depends = ["visual-build"]
+run = "OMISSION_UINPUT=.build/omission-uinput node tests/live/run.mjs"
+
+[tasks.test-live]
+description = "Exercise the installed Alt-Tab overlay in the active Hyprland session"
+run = "tests/live/run-live-smoke"

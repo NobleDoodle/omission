@@ -1,0 +1,244 @@
+#!/usr/bin/env bash
+# background-source — report the effective wallpaper for one monitor.
+#
+# Usage: background-source <monitor>
+#
+# Prints exactly one compact JSON object on stdout and exits 0:
+#   {"path":"<canonical path or empty>","kind":"image|video|none","source":"mpvpaper|state|none"}
+#
+#   1. mpvpaper — a live process under OMISSION_PROC_ROOT (default /proc) whose
+#      <output> operand equals the requested monitor or is "*" (all
+#      outputs). Exact monitor matches beat wildcards. A process counts as
+#      mpvpaper only after authentication: its process directory must be
+#      owned by the effective user and its /proc/<pid>/exe symlink must
+#      canonicalize to the mpvpaper executable resolved from PATH. argv[0]
+#      is chosen by the process itself and proves nothing.
+#   2. state — the Omarchy current-background symlink, OMISSION_BACKGROUND_LINK
+#      (default $HOME/.local/state/omarchy/current/background).
+#
+# Safety: argv bytes from other processes are only ever compared or passed as
+# quoted arguments to realpath(1) — never evaluated or interpolated into
+# shell syntax. Reads are count- and byte-bounded and use shell builtins; the
+# script writes nothing and performs no network I/O. OMISSION_PROC_ROOT and
+# OMISSION_BACKGROUND_LINK exist so tests can inject deterministic fixtures.
+
+set -euo pipefail
+export LC_ALL=C
+
+CMDLINE_BYTES_MAX=65536   # max bytes read from one cmdline
+ARGV_COUNT_MAX=512        # max argv fields per process
+SCAN_ENTRIES_MAX=4096     # max processes per scan
+
+(( $# == 1 )) || { printf 'usage: background-source <monitor>\n' >&2; exit 2; }
+monitor=$1
+proc_root=${OMISSION_PROC_ROOT:-/proc}
+
+argv=()
+MPV_EXACT=()
+MPV_WILDCARD=()
+MPV_OUTPUT=
+MPV_PATH=
+EXPECTED_EXE=
+RESOLVED=
+ESCAPED=
+KIND=
+
+# True when the lowercased extension is a common video container.
+is_video_extension() {
+  case $1 in
+    3g2|3gp|avi|flv|m2ts|mkv|mov|mp4|m4v|mpeg|mpg|ogv|ts|webm|wmv) return 0 ;;
+  esac
+  return 1
+}
+
+# Sets KIND to "video" or "image" according to the path's extension.
+kind_of_path() {
+  local ext=${1##*.}
+  ext=${ext,,}
+  if [[ $1 == *.* ]] && is_video_extension "$ext"; then
+    KIND=video
+  else
+    KIND=image
+  fi
+}
+
+# Sets RESOLVED to the canonical path when $1 names an existing local regular
+# file. Absolute paths only: a relative operand belongs to mpvpaper's cwd
+# (unknowable from here), and remote URLs (scheme://…) never start with "/".
+resolve_local() {
+  RESOLVED=
+  if [[ $1 != /* ]]; then return 1; fi
+  if ! RESOLVED=$(realpath -e -- "$1" 2>/dev/null); then RESOLVED=; return 1; fi
+  [[ -f $RESOLVED ]]
+}
+
+# Escapes $1 for a JSON string literal (RFC 8259): the escape character, the
+# double quote, and C0 control codes. All other bytes pass through unchanged.
+json_escape() {
+  local raw=$1 out= i=0 ch= code= escape="\\" quote='"'
+  while (( i < ${#raw} )); do
+    ch=${raw:i:1}
+    if [[ $ch == "$escape" ]]; then
+      out+="$escape$escape"
+    elif [[ $ch == "$quote" ]]; then
+      out+="$escape$quote"
+    else
+      if ! printf -v code '%d' "'$ch"; then code=-1; fi
+      if (( code >= 0 && code < 32 )); then
+        out+=$escape
+        printf -v ch 'u%04x' "$code"
+      fi
+      out+=$ch
+    fi
+    i=$((i + 1))
+  done
+  ESCAPED=$out
+}
+
+# Sets the global argv array from one /proc-style cmdline file: NUL-delimited
+# fields, dropping a trailing field whose NUL terminator is missing. Bounded
+# by ARGV_COUNT_MAX entries and CMDLINE_BYTES_MAX bytes, builtins only.
+read_cmdline_argv() {
+  local arg total=0 fd=
+  argv=()
+  if ! exec {fd}<"$1"; then return 1; fi
+  while IFS= read -r -u "$fd" -d '' arg; do
+    argv+=("$arg")
+    total=$(( total + ${#arg} + 1 ))
+    if (( ${#argv[@]} >= ARGV_COUNT_MAX || total >= CMDLINE_BYTES_MAX )); then
+      break
+    fi
+  done
+  exec {fd}<&-
+}
+
+# Parses mpvpaper's argv after argv[0] per its getopt grammar: clustered
+# short flags (-vp), value flags (-o, -l, -a, -n) taking either the rest of
+# the cluster or the next argument, --opt=value long forms, and "--" ending
+# option parsing. Sets MPV_OUTPUT and MPV_PATH; succeeds only when exactly
+# the <output> and <path> operands remain.
+parse_mpvpaper_argv() {
+  local -a positional=()
+  local arg rest flag takes_value
+  MPV_OUTPUT= MPV_PATH=
+  while (( $# > 0 )); do
+    arg=$1
+    shift
+    case $arg in
+      --)
+        positional+=("$@")
+        break
+        ;;
+      --mpv-options=*|--layer=*|--auto-mode=*|--slideshow=*)
+        ;;
+      --mpv-options|--layer|--auto-mode|--slideshow)
+        shift
+        ;;
+      -*)
+        rest=${arg:1}
+        takes_value=
+        while [[ -n $rest ]]; do
+          flag=${rest:0:1}
+          if [[ $flag == [olan] ]]; then
+            rest=${rest:1}
+            if [[ -z $rest ]]; then takes_value=1; fi
+            break
+          fi
+          rest=${rest:1}
+        done
+        if [[ -n $takes_value ]]; then shift; fi
+        ;;
+      *)
+        positional+=("$arg")
+        ;;
+    esac
+  done
+  if (( ${#positional[@]} != 2 )); then return 1; fi
+  MPV_OUTPUT=${positional[0]}
+  MPV_PATH=${positional[1]}
+}
+
+# Sets EXPECTED_EXE to the one canonical mpvpaper executable: the first
+# executable named mpvpaper on PATH with every symlink resolved. Empty when
+# mpvpaper is not installed, which disables the mpvpaper source entirely.
+resolve_expected_exe() {
+  local found=
+  EXPECTED_EXE=
+  if found=$(command -v mpvpaper 2>/dev/null); then
+    EXPECTED_EXE=$(realpath -e -- "$found" 2>/dev/null) || EXPECTED_EXE=
+  fi
+}
+
+# Fills MPV_EXACT (output equals the monitor) and MPV_WILDCARD (output "*")
+# with candidate paths from authenticated live mpvpaper processes, in scan
+# order. Nothing can be authenticated without an EXPECTED_EXE.
+find_mpvpaper_candidates() {
+  local -a cmdlines=()
+  local entry pid dir exe
+  [[ -n $EXPECTED_EXE ]] || return 0
+  shopt -s nullglob
+  for entry in "$proc_root"/*/cmdline; do
+    pid=${entry%%/cmdline}
+    pid=${pid##*/}
+    if [[ $pid =~ ^[0-9]+$ ]]; then
+      cmdlines+=("$entry")
+      if (( ${#cmdlines[@]} >= SCAN_ENTRIES_MAX )); then break; fi
+    fi
+  done
+  shopt -u nullglob
+
+  for entry in "${cmdlines[@]}"; do
+    # Authenticate before reading anything the process wrote: the process
+    # directory must belong to the effective user, and the exe symlink must
+    # canonicalize to the expected mpvpaper binary. argv[0] is spoofable.
+    dir=${entry%/cmdline}
+    [[ -O $dir ]] || continue
+    exe=$(realpath -e -- "$dir/exe" 2>/dev/null) || continue
+    [[ $exe == "$EXPECTED_EXE" ]] || continue
+    read_cmdline_argv "$entry" 2>/dev/null || continue
+    if (( ${#argv[@]} > 1 )) && [[ ${argv[0]##*/} == 'mpvpaper' ]]; then
+      parse_mpvpaper_argv "${argv[@]:1}" || continue
+      if [[ $MPV_OUTPUT == "$monitor" ]]; then
+        MPV_EXACT+=("$MPV_PATH")
+      elif [[ $MPV_OUTPUT == '*' ]]; then
+        MPV_WILDCARD+=("$MPV_PATH")
+      fi
+    fi
+  done
+}
+
+# Prints the single-line JSON result for one resolved source.
+emit_result() {
+  if [[ -n $1 ]]; then
+    kind_of_path "$1"
+    json_escape "$1"
+    printf '{"path":"%s","kind":"%s","source":"%s"}\n' "$ESCAPED" "$KIND" "$2"
+  else
+    printf '{"path":"","kind":"none","source":"none"}\n'
+  fi
+}
+
+main() {
+  local candidate link
+  resolve_expected_exe
+  find_mpvpaper_candidates
+  for candidate in "${MPV_EXACT[@]}" "${MPV_WILDCARD[@]}"; do
+    if resolve_local "$candidate"; then
+      emit_result "$RESOLVED" mpvpaper
+      return 0
+    fi
+  done
+
+  link=${OMISSION_BACKGROUND_LINK:-}
+  if [[ -z $link && -n ${HOME:-} ]]; then
+    link=$HOME/.local/state/omarchy/current/background
+  fi
+  if [[ -n $link ]] && resolve_local "$link"; then
+    emit_result "$RESOLVED" state
+    return 0
+  fi
+
+  emit_result "" none
+}
+
+main

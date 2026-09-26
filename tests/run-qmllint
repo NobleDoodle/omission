@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+plugin_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+shell_root=${OMARCHY_SHELL_ROOT:-/usr/share/omarchy/shell}
+qmllint=/usr/lib/qt6/bin/qmllint
+
+[[ -x $qmllint ]] || { echo "qmllint not found: $qmllint" >&2; exit 1; }
+
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+mkdir -p "$tmp/qs"
+import_args=(--import disable)
+portable_args=(--unresolved-type disable --inheritance-cycle disable --required disable)
+if [[ -d $shell_root/Commons && -d $shell_root/Ui ]]; then
+  ln -s "$shell_root/Commons" "$tmp/qs/Commons"
+  ln -s "$shell_root/Ui" "$tmp/qs/Ui"
+  import_args=(-I "$tmp" -I "$shell_root")
+  portable_args=()
+fi
+ln -s "$plugin_dir" "$tmp/plugin"
+
+"$qmllint" \
+  "${import_args[@]}" \
+  "${portable_args[@]}" \
+  --uncreatable-type disable \
+  --signal-handler-parameters disable \
+  --unqualified disable \
+  --missing-property disable \
+  --max-warnings 0 \
+  "$plugin_dir/Overlay.qml" \
+  "$plugin_dir/WindowSwitcher.qml" \
+  "$plugin_dir/AltTabService.qml" \
+  "$plugin_dir/Overview.qml" \
+  "$plugin_dir/Service.qml" \
+  "$plugin_dir/BarWidget.qml"
