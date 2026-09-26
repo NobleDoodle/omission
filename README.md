@@ -54,25 +54,6 @@ Omarchy adds plugins *disabled* unless you pass `--enable`, so you can also leav
 
 The single overlay entry point, `Overlay.qml`, hosts both surfaces. They are mutually exclusive: opening the overview dismisses the Alt-Tab switcher, and starting an Alt-Tab switch closes the overview.
 
-### Coming from Mission Control
-
-Omission replaces Mission Control; they are different plugins that bind the same shortcuts and gestures, so remove the old one **first**:
-
-```bash
-omarchy plugin disable bitr0t.omarchy-mission-control
-omarchy plugin remove bitr0t.omarchy-mission-control --yes
-omarchy plugin add https://github.com/NobleDoodle/omission --enable
-```
-
-Omission keeps its own state files, so your spaces and their names start fresh. To carry them over:
-
-```bash
-cp ~/.local/state/omarchy/mission-control-spaces.json ~/.local/state/omarchy/omission-spaces.json
-cp ~/.local/state/omarchy/mission-control-space-names.json ~/.local/state/omarchy/omission-space-names.json
-```
-
-If you previously installed the standalone Alt-Tab plugin (`bitr0t.window-switcher`), disable or remove it before enabling Omission; both bind `Alt+Tab` and `Alt+Shift+Tab`.
-
 ## Use: the overview
 
 Open the overview with:

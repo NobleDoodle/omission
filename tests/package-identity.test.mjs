@@ -27,8 +27,7 @@ test("package uses one public plugin identity", () => {
   assert.equal(manifest.author, "NobleDoodle")
   assert.equal(manifest.license, "MIT")
   for (const file of shippedFiles) {
-    if (file.name !== "README.md")
-      assert.ok(!file.source.includes(upstreamId), `${file.name} contains Mission Control's plugin id`)
+    assert.ok(!file.source.includes(upstreamId), `${file.name} contains Mission Control's plugin id`)
     assert.ok(!file.source.includes(upstreamDashNamespace), `${file.name} contains Mission Control's IPC namespace`)
     assert.ok(!file.source.includes(upstreamLuaNamespace), `${file.name} contains Mission Control's Lua namespace`)
   }
@@ -39,13 +38,11 @@ test("plugin service never rewrites shell configuration", () => {
   assert.doesNotMatch(service, /mutateShellConfig|barMigration|shellConfig|bar\.layout/)
 })
 
-test("the package documents explicit install, switching over, and removal", () => {
+test("the package documents explicit install, update, and removal", () => {
   const readme = readFileSync(new URL("README.md", root), "utf8")
   assert.match(readme, /omarchy plugin add https:\/\/github\.com\/NobleDoodle\/omission --enable/)
   assert.match(readme, /omarchy plugin update io\.github\.nobledoodle\.omission/)
   assert.match(readme, /omarchy plugin remove io\.github\.nobledoodle\.omission/)
-  assert.match(readme, /omarchy plugin disable bitr0t\.omarchy-mission-control/)
-  assert.match(readme, /omarchy plugin remove bitr0t\.omarchy-mission-control --yes/)
   assert.match(readme, /never edits `~\/\.config\/omarchy\/shell\.json` or `bar\.layout` itself/)
   assert.match(readme, /\[MIT\]\(LICENSE\)/)
 })
