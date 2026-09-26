@@ -23,7 +23,7 @@ const upstreamLuaNamespace = ["bitr0t", "omarchy_mission_control"].join("_")
 test("package uses one public plugin identity", () => {
   assert.equal(manifest.id, "io.github.nobledoodle.omission")
   assert.equal(manifest.name, "Omission")
-  assert.equal(manifest.version, "1.0.0")
+  assert.equal(manifest.version, "1.0.1")
   assert.equal(manifest.author, "NobleDoodle")
   assert.equal(manifest.license, "MIT")
   for (const file of shippedFiles) {

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.nobledoodle.omission",
   "name": "Omission",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "NobleDoodle",
   "license": "MIT",
   "description": "A macOS-style overview for Omarchy: your own wallpaper, a frosted strip of spaces, and the active workspace's windows laid out exactly as they are tiled, handed over from and back to the desktop without a flash. Includes the dynamic bar spaces widget and a themed Alt-Tab switcher for the active workspace. Derived from Mission Control by Ryan Macy.",

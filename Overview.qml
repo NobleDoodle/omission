@@ -101,9 +101,13 @@ Item {
   property int captureBeat: 0
   property var hyprDeco: ({
     border: 2,
+    rounding: Math.max(0, Style.cornerRadius),
     active: Qt.rgba(0.91, 0.74, 0.45, 1),
     inactive: Qt.rgba(0.35, 0.35, 0.35, 0.67)
   })
+  // Hyprland's window rounding, re-read on every config reload. Space cards
+  // wear it as is; windows wear it scaled with them, as the real ones would.
+  readonly property real hyprRounding: Math.max(0, Number(root.hyprDeco.rounding) || 0)
   // The open/close motion, 20% faster than upstream's 240 ms in / 160 ms out.
   readonly property int openDuration: 192
   readonly property int closeDuration: 128
@@ -264,6 +268,7 @@ Item {
   function applyHyprDeco(text) {
     var next = {
       border: root.hyprDeco.border,
+      rounding: root.hyprDeco.rounding,
       active: root.hyprDeco.active,
       inactive: root.hyprDeco.inactive
     }
@@ -276,6 +281,8 @@ Item {
         : entry.str !== undefined ? entry.str : entry.int
       if (entry.option === "general:border_size" && isFinite(Number(value)))
         next.border = Math.max(0, Math.min(20, Number(value)))
+      else if (entry.option === "decoration:rounding" && isFinite(Number(value)))
+        next.rounding = Math.max(0, Math.min(100, Number(value)))
       else if (entry.option === "general:col.active_border")
         next.active = root.hyprColor(value, next.active)
       else if (entry.option === "general:col.inactive_border")
@@ -294,7 +301,8 @@ Item {
     id: hyprDecoProcess
     environment: root.trustedEnvironment
     command: ["hyprctl", "--batch", "j/getoption general:border_size ; "
-      + "j/getoption general:col.active_border ; j/getoption general:col.inactive_border"]
+      + "j/getoption general:col.active_border ; j/getoption general:col.inactive_border ; "
+      + "j/getoption decoration:rounding"]
     stdout: StdioCollector { id: hyprDecoStdout; waitForEnd: true }
     onExited: function(exitCode) { if (exitCode === 0) root.applyHyprDeco(hyprDecoStdout.text) }
   }
@@ -1485,7 +1493,7 @@ Item {
 
                 width: workspaceRail.chipWidth
                 height: workspaceRail.chipHeight
-                radius: Math.max(Style.cornerRadius - 4, 12)
+                radius: root.hyprRounding
                 color: windowDropTarget || selected
                   ? root.selectedColor : Util.alpha(root.backgroundColor, 0.55)
                 border.color: windowDropTarget
@@ -1558,14 +1566,27 @@ Item {
                       width: geometry ? geometry.width : 0
                       height: geometry ? geometry.height : 0
 
-                      ScreencopyView {
+                      ClippingRectangle {
                         anchors.fill: parent
-                        captureSource: root.windowCapturesEnabled
-                          && (workspaceChip.selected
-                            || workspaceChip.index < root.thumbnailWorkspaceBudget)
-                          ? thumbnailWindow.modelData.wayland : null
-                        live: false
-                        paintCursor: false
+                        radius: {
+                          var size = WindowModel.valuesOf(
+                            WindowModel.metadata(thumbnailWindow.modelData).size)
+                          var realWidth = Number(size[0]) || 0
+                          return realWidth > 0
+                            ? root.hyprRounding * thumbnailWindow.width / realWidth : 0
+                        }
+                        // ClippingRectangle paints white under its content by default.
+                        color: "transparent"
+
+                        ScreencopyView {
+                          anchors.fill: parent
+                          captureSource: root.windowCapturesEnabled
+                            && (workspaceChip.selected
+                              || workspaceChip.index < root.thumbnailWorkspaceBudget)
+                            ? thumbnailWindow.modelData.wayland : null
+                          live: false
+                          paintCursor: false
+                        }
                       }
                     }
                   }
@@ -1638,7 +1659,7 @@ Item {
                   y: -3
                   width: parent.width + 6
                   height: parent.height + 6
-                  radius: workspaceChip.radius + 3
+                  radius: workspaceChip.radius > 0 ? workspaceChip.radius + 3 : 0
                   color: "transparent"
                   border.width: 3
                   border.color: root.hyprDeco.active
@@ -1904,7 +1925,7 @@ Item {
               // On screen with nothing captured yet: the stage waits for it.
               readonly property bool waiting: windowCell.onScreen
                 && !!modelData.captureSource && !preview.hasContent
-              readonly property real cornerRadius: Math.max(0, Style.cornerRadius)
+              readonly property real cornerRadius: root.hyprRounding
                 * (windowCell.realRect ? windowCell.width / windowCell.realRect.width : 1)
               readonly property bool showTitle: root.stageInteractive && !windowCell.beingDragged
                 && (windowCell.hovered || (windowCell.selected && root.keyboardSelecting))
@@ -1996,7 +2017,7 @@ Item {
                   y: -thickness
                   width: parent.width + 2 * thickness
                   height: parent.height + 2 * thickness
-                  radius: windowCell.cornerRadius + thickness
+                  radius: windowCell.cornerRadius > 0 ? windowCell.cornerRadius + thickness : 0
                   color: "transparent"
                   border.width: thickness
                   border.color: windowCell.focusedWindow
@@ -2124,7 +2145,7 @@ Item {
                   y: -3
                   width: parent.width + 6
                   height: parent.height + 6
-                  radius: windowCell.cornerRadius + 3
+                  radius: windowCell.cornerRadius > 0 ? windowCell.cornerRadius + 3 : 0
                   color: "transparent"
                   border.width: 3
                   border.color: root.hyprDeco.active

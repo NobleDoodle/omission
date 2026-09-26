@@ -122,7 +122,8 @@ test("the focused space is ringed like the focused window", () => {
   const chip = qml.slice(qml.indexOf("id: workspaceChip"), qml.indexOf("id: removeSpaceButton"))
   const ring = chip.match(/Rectangle \{\s*x: -3\s*y: -3[\s\S]*?\n                \}\n/)?.[0] || ""
   assert.match(ring, /border\.width: 3\s*border\.color: root\.hyprDeco\.active\s*opacity: workspaceChip\.selected \? 1 : 0/)
-  assert.match(ring, /radius: workspaceChip\.radius \+ 3/)
+  // Square when Hyprland's windows are square, as Hyprland's own border is.
+  assert.match(ring, /radius: workspaceChip\.radius > 0 \? workspaceChip\.radius \+ 3 : 0/)
   const windowRing = stage.match(/x: -3\s*y: -3[\s\S]*?border\.color: root\.hyprDeco\.active/)?.[0] || ""
   assert.ok(windowRing, "the window ring is the model")
   assert.doesNotMatch(chip, /workspaceChip\.windowDropTarget \|\| workspaceChip\.selected\s*\? root\.selectedBorderColor : Util\.alpha/, "no faint inner ring for the selected space")
@@ -152,4 +153,16 @@ test("an inactive space card is outlined in Hyprland's inactive window border co
   assert.match(chip, /border\.color: windowDropTarget\s*\? root\.selectedBorderColor : root\.hyprDeco\.inactive\s*border\.width: windowDropTarget \? 3 : 1/)
   assert.match(chip, /border\.color: workspaceChip\.windowDropTarget\s*\? root\.selectedBorderColor : root\.hyprDeco\.inactive/)
   assert.match(qml, /inactive: Qt\.rgba\(0\.35, 0\.35, 0\.35, 0\.67\)|next\.inactive = root\.hyprColor\(value, next\.inactive\)/)
+})
+
+test("space cards and windows take their corners from Hyprland's rounding", () => {
+  assert.match(qml, /"j\/getoption decoration:rounding"/)
+  assert.match(qml, /entry\.option === "decoration:rounding" && isFinite\(Number\(value\)\)\)\s*\n\s*next\.rounding = Math\.max\(0, Math\.min\(100, Number\(value\)\)\)/)
+  const chip = qml.slice(qml.indexOf("id: workspaceChip"), qml.indexOf("id: removeSpaceButton"))
+  assert.match(chip, /radius: root\.hyprRounding\n/, "a space card wears the rounding as is")
+  assert.doesNotMatch(chip, /radius: Math\.max\(/, "no minimum radius on a space card")
+  assert.match(qml, /radius: \{[\s\S]*?root\.hyprRounding \* thumbnailWindow\.width \/ realWidth : 0\s*\}/, "mini windows scale it")
+  assert.match(stage, /readonly property real cornerRadius: root\.hyprRounding\s*\n\s*\* \(windowCell\.realRect \? windowCell\.width \/ windowCell\.realRect\.width : 1\)/)
+  assert.match(stage, /radius: windowCell\.cornerRadius > 0 \? windowCell\.cornerRadius \+ thickness : 0/)
+  assert.match(stage, /radius: windowCell\.cornerRadius > 0 \? windowCell\.cornerRadius \+ 3 : 0/)
 })
