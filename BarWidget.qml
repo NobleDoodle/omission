@@ -80,23 +80,37 @@ BarWidget {
 
   readonly property real trailingGap: root.vertical ? 0 : Style.spaceReal(1.5)
 
-  visible: spaceIds.length > 0
-  implicitWidth: spaceIds.length > 0 ? grid.implicitWidth + trailingGap : 0
-  implicitHeight: spaceIds.length > 0 ? grid.implicitHeight : 0
+  // Style and visibility come from the overview's settings panel, through
+  // the service, so every bar instance follows one saved choice. Nothing is
+  // drawn until those settings load, so a saved style never flashes numbers.
+  readonly property var omissionSettings: root.spaceService
+    ? (root.spaceService.settingsLoaded ? root.spaceService.settings : null)
+    : WindowModel.normalizedSettings({})
+  readonly property string barStyle: omissionSettings ? omissionSettings.barStyle : "numbers"
+  readonly property bool showSpaces: !!omissionSettings && omissionSettings.showBarSpaces
+  readonly property var shownIds: showSpaces ? spaceIds : []
+  readonly property bool numbered: barStyle === "numbers"
+  // Dots and lines carry their gap inside each button, as Workspace Dots does.
+  readonly property real cellGap: barStyle === "pills" ? Style.spaceReal(4) : Style.spaceReal(6)
+
+  visible: shownIds.length > 0
+  implicitWidth: shownIds.length > 0 ? grid.implicitWidth + trailingGap : 0
+  implicitHeight: shownIds.length > 0 ? grid.implicitHeight : 0
 
   GridLayout {
     id: grid
     anchors.fill: parent
     anchors.rightMargin: root.trailingGap
-    columns: root.vertical ? 1 : root.spaceIds.length
-    columnSpacing: root.vertical ? 0 : Style.space(1)
-    rowSpacing: root.vertical ? Style.space(2) : 0
+    columns: root.vertical ? 1 : Math.max(1, root.shownIds.length)
+    columnSpacing: root.vertical || !root.numbered ? 0 : Style.space(1)
+    rowSpacing: root.vertical && root.numbered ? Style.space(2) : 0
 
     Repeater {
       id: workspaceButtons
-      model: root.spaceIds
+      model: root.shownIds
 
       WidgetButton {
+        id: spaceButton
         required property int modelData
 
         readonly property var workspace: root.workspaceById(modelData)
@@ -105,19 +119,43 @@ BarWidget {
         readonly property string customName: root.spaceService
           && root.spaceService.namesLoaded
           ? String(root.spaceService.spaceNames[String(modelData)] || "") : ""
+        readonly property string numberLabel: modelData === 10 ? "0" : String(modelData)
+        // Grows the focused mark only after creation, so it animates in.
+        property bool ready: false
+        Component.onCompleted: ready = true
 
         bar: root.bar
-        text: customName || (focused ? "\uDB85\uDCFB" : (modelData === 10 ? "0" : String(modelData)))
-        opacity: customName || occupied || focused ? 1 : 0.5
+        text: root.numbered
+          ? (customName || (focused ? "\uDB85\uDCFB" : numberLabel)) : ""
+        labelVisible: root.numbered
+        hasVisualContent: true
+        tooltipText: root.numbered || root.barStyle === "pills" ? ""
+          : (customName || "Space " + numberLabel)
+        opacity: !root.numbered || customName || occupied || focused ? 1 : 0.5
         horizontalMargin: 6
         verticalPadding: 6
         fixedWidth: root.vertical ? root.barSize
+          : !root.numbered ? mark.implicitWidth + root.cellGap
           : (customName
             ? Math.min(Style.space(96), Math.max(Style.space(20),
               Style.space(12 + customName.length * 7)))
             : Style.space(20))
-        fixedHeight: root.barSize
+        fixedHeight: root.vertical && !root.numbered
+          ? mark.implicitHeight + root.cellGap : root.barSize
         onPressed: function() { root.focusWorkspace(modelData) }
+
+        SpaceMark {
+          id: mark
+          anchors.centerIn: parent
+          visible: !root.numbered
+          style: root.numbered ? "dots" : root.barStyle
+          focused: spaceButton.focused && spaceButton.ready
+          occupied: spaceButton.occupied
+          label: spaceButton.customName || spaceButton.numberLabel
+          foreground: root.bar ? root.bar.barForeground : Color.foreground
+          fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
+          vertical: root.vertical
+        }
       }
     }
   }

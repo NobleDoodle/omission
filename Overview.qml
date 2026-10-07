@@ -7,6 +7,7 @@ import Quickshell.Io
 import Quickshell.Wayland
 import Quickshell.Widgets
 import qs.Commons
+import qs.Ui as Ui
 import "WindowModel.js" as WindowModel
 import "SwitcherModel.js" as SwitcherModel
 
@@ -32,6 +33,14 @@ Item {
     ? spaceService.managedWorkspaceIds : []
   readonly property bool spacesLoaded: !!spaceService && spaceService.spacesLoaded
   property int editingWorkspaceId: -1
+  // The settings panel behind the rail's gear (or S): bar indicator style
+  // and visibility, saved by the service for every bar.
+  property bool settingsOpen: false
+  readonly property var omissionSettings: spaceService && spaceService.settingsLoaded
+    ? spaceService.settings : WindowModel.normalizedSettings({})
+  readonly property var barStyleTitles: ({
+    numbers: "Numbers", dots: "Dots", pills: "Pills", lines: "Lines"
+  })
   property int desktopRevision: 0
   property bool opened: false
   property bool closing: false
@@ -103,11 +112,27 @@ Item {
     border: 2,
     rounding: Math.max(0, Style.cornerRadius),
     active: Qt.rgba(0.91, 0.74, 0.45, 1),
-    inactive: Qt.rgba(0.35, 0.35, 0.35, 0.67)
+    inactive: Qt.rgba(0.35, 0.35, 0.35, 0.67),
+    power: 2,
+    activeGradient: ({ colors: [], angle: 0 }),
+    inactiveGradient: ({ colors: [], angle: 0 })
   })
-  // Hyprland's window rounding, re-read on every config reload. Space cards
-  // wear it as is; windows wear it scaled with them, as the real ones would.
+  // Hyprland's own window borders, drawn by HyprBorder: every stop and the
+  // angle of col.active_border / col.inactive_border, at general:border_size.
+  readonly property var activeBorderColors: root.hyprDeco.activeGradient.colors.length > 0
+    ? root.hyprDeco.activeGradient.colors : [root.hyprDeco.active]
+  readonly property var inactiveBorderColors: root.hyprDeco.inactiveGradient.colors.length > 0
+    ? root.hyprDeco.inactiveGradient.colors : [root.hyprDeco.inactive]
+  // Selection rings wear the real border; with border_size 0 they keep 2 px so
+  // the selection stays visible.
+  readonly property real selectionBorder: Number(root.hyprDeco.border) > 0
+    ? Number(root.hyprDeco.border) : 2
+  // Hyprland's window rounding, re-read on every config reload: decoration
+  // rounding scaled by rounding_power / 2, as Hyprland itself scales it
+  // (CWindow::rounding). Space cards wear it as is; windows wear it scaled
+  // with them, as the real ones would.
   readonly property real hyprRounding: Math.max(0, Number(root.hyprDeco.rounding) || 0)
+    * root.hyprDeco.power / 2
   // The open/close motion, 20% faster than upstream's 240 ms in / 160 ms out.
   readonly property int openDuration: 192
   readonly property int closeDuration: 128
@@ -270,7 +295,10 @@ Item {
       border: root.hyprDeco.border,
       rounding: root.hyprDeco.rounding,
       active: root.hyprDeco.active,
-      inactive: root.hyprDeco.inactive
+      inactive: root.hyprDeco.inactive,
+      power: root.hyprDeco.power,
+      activeGradient: root.hyprDeco.activeGradient,
+      inactiveGradient: root.hyprDeco.inactiveGradient
     }
     var chunks = String(text || "").split(/\n\s*\n/)
     for (var i = 0; i < chunks.length; i++) {
@@ -278,15 +306,21 @@ Item {
       try { entry = JSON.parse(chunks[i]) } catch (_error) { continue }
       if (!entry) continue
       var value = entry.gradient !== undefined ? entry.gradient
-        : entry.str !== undefined ? entry.str : entry.int
+        : entry.str !== undefined ? entry.str
+        : entry.float !== undefined ? entry.float : entry.int
       if (entry.option === "general:border_size" && isFinite(Number(value)))
         next.border = Math.max(0, Math.min(20, Number(value)))
       else if (entry.option === "decoration:rounding" && isFinite(Number(value)))
         next.rounding = Math.max(0, Math.min(100, Number(value)))
-      else if (entry.option === "general:col.active_border")
+      else if (entry.option === "decoration:rounding_power" && isFinite(Number(value)))
+        next.power = Math.max(1, Math.min(10, Number(value)))
+      else if (entry.option === "general:col.active_border") {
         next.active = root.hyprColor(value, next.active)
-      else if (entry.option === "general:col.inactive_border")
+        next.activeGradient = WindowModel.hyprBorderGradient(value)
+      } else if (entry.option === "general:col.inactive_border") {
         next.inactive = root.hyprColor(value, next.inactive)
+        next.inactiveGradient = WindowModel.hyprBorderGradient(value)
+      }
     }
     root.hyprDeco = next
   }
@@ -302,7 +336,7 @@ Item {
     environment: root.trustedEnvironment
     command: ["hyprctl", "--batch", "j/getoption general:border_size ; "
       + "j/getoption general:col.active_border ; j/getoption general:col.inactive_border ; "
-      + "j/getoption decoration:rounding"]
+      + "j/getoption decoration:rounding ; j/getoption decoration:rounding_power"]
     stdout: StdioCollector { id: hyprDecoStdout; waitForEnd: true }
     onExited: function(exitCode) { if (exitCode === 0) root.applyHyprDeco(hyprDecoStdout.text) }
   }
@@ -657,6 +691,7 @@ Item {
     root.stageFrozen = false
     root.selectedIndex = -1
     root.editingWorkspaceId = -1
+    root.settingsOpen = false
     root.windowDragActive = false
     root.windowDragIndex = -1
     root.windowDropWorkspaceId = -1
@@ -669,6 +704,7 @@ Item {
   function close() {
     if (!root.opened || root.closing) return
     root.editingWorkspaceId = -1
+    root.settingsOpen = false
     root.windowDragActive = false
     thumbnailCaptureTimer.stop()
     thumbnailCaptureBatchTimer.stop()
@@ -956,6 +992,40 @@ Item {
     root.keyboardSelecting = true
     root.selectedIndex = WindowModel.spatialNeighborIndex(
       root.stageRects(), root.selectedIndex, horizontal, vertical)
+  }
+
+  function toggleSettings() {
+    if (root.editingWorkspaceId >= 0) return
+    root.settingsOpen = !root.settingsOpen
+  }
+
+  function setBarStyle(style) {
+    if (root.spaceService && typeof root.spaceService.setBarStyle === "function")
+      root.spaceService.setBarStyle(style)
+  }
+
+  function setShowBarSpaces(shown) {
+    if (root.spaceService && typeof root.spaceService.setShowBarSpaces === "function")
+      root.spaceService.setShowBarSpaces(shown)
+  }
+
+  // While the panel is open it owns the keyboard: nothing reaches the stage.
+  function handleSettingsKey(event) {
+    var key = event.key
+    var style = root.omissionSettings.barStyle
+    var number = root.workspaceNumberForKey(key)
+    if (key === Qt.Key_Escape || key === Qt.Key_S || key === Qt.Key_Q)
+      root.settingsOpen = false
+    else if (key === Qt.Key_Left || key === Qt.Key_Up || key === Qt.Key_H
+        || key === Qt.Key_K || key === Qt.Key_Backtab)
+      root.setBarStyle(WindowModel.nextBarStyle(style, -1))
+    else if (key === Qt.Key_Right || key === Qt.Key_Down || key === Qt.Key_L
+        || key === Qt.Key_J || key === Qt.Key_Tab)
+      root.setBarStyle(WindowModel.nextBarStyle(style, 1))
+    else if (key === Qt.Key_Space || key === Qt.Key_Return || key === Qt.Key_Enter)
+      root.setShowBarSpaces(!root.omissionSettings.showBarSpaces)
+    else if (number > 0 && number <= WindowModel.BAR_STYLES.length)
+      root.setBarStyle(WindowModel.BAR_STYLES[number - 1])
   }
 
   function workspaceNumberForKey(key) {
@@ -1277,7 +1347,15 @@ Item {
           event.accepted = false
           return
         }
-        if (event.key === Qt.Key_Escape || (event.key === Qt.Key_Q && vimModifiers)) {
+        if (root.settingsOpen) {
+          root.handleSettingsKey(event)
+          event.accepted = true
+          return
+        }
+        if (event.key === Qt.Key_S && event.modifiers === Qt.NoModifier) {
+          root.settingsOpen = true
+          event.accepted = true
+        } else if (event.key === Qt.Key_Escape || (event.key === Qt.Key_Q && vimModifiers)) {
           root.close()
           event.accepted = true
         } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
@@ -1654,15 +1732,16 @@ Item {
                   }
                 }
 
-                Rectangle {
-                  x: -3
-                  y: -3
-                  width: parent.width + 6
-                  height: parent.height + 6
-                  radius: workspaceChip.radius > 0 ? workspaceChip.radius + 3 : 0
-                  color: "transparent"
-                  border.width: 3
-                  border.color: root.hyprDeco.active
+                HyprBorder {
+                  x: -root.selectionBorder
+                  y: -root.selectionBorder
+                  width: parent.width + 2 * root.selectionBorder
+                  height: parent.height + 2 * root.selectionBorder
+                  innerRadius: workspaceChip.radius
+                  thickness: root.selectionBorder
+                  roundingPower: root.hyprDeco.power
+                  colors: root.activeBorderColors
+                  angle: root.hyprDeco.activeGradient.angle
                   opacity: workspaceChip.selected ? 1 : 0
                   visible: opacity > 0.01
 
@@ -1869,6 +1948,35 @@ Item {
             }
           }
 
+          Item {
+            id: settingsButton
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.leftMargin: Math.max(Style.space(12), 12)
+            anchors.topMargin: Math.max(Style.space(10), 10)
+            width: Math.max(Style.space(28), 28)
+            height: width
+
+            Text {
+              anchors.centerIn: parent
+              text: "\uF013"
+              color: root.foregroundColor
+              opacity: settingsMouse.containsMouse || root.settingsOpen ? 1 : 0.6
+              font.family: Style.font.family
+              font.pixelSize: Math.max(Style.font.subtitle, 16)
+
+              Behavior on opacity { NumberAnimation { duration: 120 } }
+            }
+
+            MouseArea {
+              id: settingsMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.toggleSettings()
+            }
+          }
+
           Rectangle {
             visible: root.dragActive && root.dragTargetIndex >= 0
               && root.dragTargetIndex !== root.dragFromIndex
@@ -1883,6 +1991,139 @@ Item {
             radius: width / 2
             color: root.selectedBorderColor
             z: 40
+          }
+        }
+
+        // Clicks outside the open settings panel close just the panel.
+        MouseArea {
+          anchors.fill: parent
+          visible: root.settingsOpen
+          z: 200
+          onClicked: root.settingsOpen = false
+        }
+
+        Rectangle {
+          id: settingsPanel
+          readonly property real padding: Math.max(Style.space(16), 16)
+          visible: root.settingsOpen
+          z: 201
+          x: settingsButton.x
+          y: workspaceRail.y + settingsButton.y + settingsButton.height + Style.space(6)
+          width: settingsColumn.implicitWidth + padding * 2
+          height: settingsColumn.implicitHeight + padding * 2
+          radius: Math.max(root.hyprRounding, Style.cornerRadius)
+          color: Util.alpha(root.backgroundColor, 0.97)
+          border.color: Util.alpha(root.foregroundColor, 0.18)
+          border.width: 1
+
+          MouseArea { anchors.fill: parent; onClicked: function(mouse) { mouse.accepted = true } }
+
+          Column {
+            id: settingsColumn
+            x: settingsPanel.padding
+            y: settingsPanel.padding
+            spacing: Math.max(Style.space(10), 10)
+
+            Text {
+              text: "Bar spaces"
+              color: root.foregroundColor
+              font.family: Style.font.menuFamily
+              font.pixelSize: Style.font.subtitle
+              font.weight: Font.DemiBold
+            }
+
+            Ui.Toggle {
+              width: styleTiles.width
+              label: "Show on the bar"
+              description: "Hiding it keeps the overview and Alt-Tab running."
+              checked: root.omissionSettings.showBarSpaces
+              foreground: root.foregroundColor
+              onClicked: root.setShowBarSpaces(!checked)
+            }
+
+            Text {
+              text: "Style"
+              color: root.foregroundColor
+              opacity: 0.7
+              font.family: Style.font.menuFamily
+              font.pixelSize: Style.font.caption
+              font.weight: Font.DemiBold
+            }
+
+            Row {
+              id: styleTiles
+              spacing: Math.max(Style.space(8), 8)
+
+              Repeater {
+                model: WindowModel.BAR_STYLES
+
+                Rectangle {
+                  id: styleTile
+                  required property string modelData
+                  required property int index
+                  readonly property bool chosen: root.omissionSettings.barStyle === modelData
+
+                  width: Math.max(Style.space(136), 136)
+                  height: Math.max(Style.space(78), 78)
+                  radius: Math.max(Style.cornerRadius, 8)
+                  color: Util.alpha(root.foregroundColor,
+                    chosen ? 0.12 : (styleTileMouse.containsMouse ? 0.07 : 0.03))
+                  border.color: chosen ? root.selectedBorderColor
+                    : Util.alpha(root.foregroundColor, 0.12)
+                  border.width: chosen ? 2 : 1
+                  opacity: root.omissionSettings.showBarSpaces ? 1 : 0.55
+
+                  Row {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    y: Math.max(Style.space(16), 16)
+                    height: Math.max(Style.space(22), 22)
+                    spacing: styleTile.modelData === "numbers" ? Style.space(10)
+                      : styleTile.modelData === "pills" ? Style.space(4) : Style.space(6)
+
+                    Repeater {
+                      model: [1, 2, 3, 4]
+
+                      SpaceMark {
+                        required property int modelData
+                        anchors.verticalCenter: parent.verticalCenter
+                        style: styleTile.modelData
+                        focused: modelData === 2
+                        occupied: modelData !== 4
+                        label: style === "numbers" && focused ? "\uDB85\uDCFB" : String(modelData)
+                        foreground: root.foregroundColor
+                      }
+                    }
+                  }
+
+                  Text {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.bottom: parent.bottom
+                    anchors.bottomMargin: Math.max(Style.space(10), 10)
+                    text: (styleTile.index + 1) + "  " + root.barStyleTitles[styleTile.modelData]
+                    color: root.foregroundColor
+                    font.family: Style.font.menuFamily
+                    font.pixelSize: Style.font.caption
+                    font.weight: styleTile.chosen ? Font.DemiBold : Font.Normal
+                  }
+
+                  MouseArea {
+                    id: styleTileMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.setBarStyle(styleTile.modelData)
+                  }
+                }
+              }
+            }
+
+            Text {
+              text: "1\u20134 or arrows: style   \u00b7   Space: show or hide   \u00b7   S or Esc: close"
+              color: root.foregroundColor
+              opacity: 0.55
+              font.family: Style.font.menuFamily
+              font.pixelSize: Style.font.caption
+            }
           }
         }
 
@@ -2011,17 +2252,17 @@ Item {
 
                 // Hyprland's own border, worn while the card stands in for the
                 // window and shed as it shrinks into the stage.
-                Rectangle {
-                  readonly property real thickness: Number(root.hyprDeco.border) || 0
+                HyprBorder {
                   x: -thickness
                   y: -thickness
                   width: parent.width + 2 * thickness
                   height: parent.height + 2 * thickness
-                  radius: windowCell.cornerRadius > 0 ? windowCell.cornerRadius + thickness : 0
-                  color: "transparent"
-                  border.width: thickness
-                  border.color: windowCell.focusedWindow
-                    ? root.hyprDeco.active : root.hyprDeco.inactive
+                  innerRadius: windowCell.cornerRadius
+                  thickness: Number(root.hyprDeco.border) || 0
+                  roundingPower: root.hyprDeco.power
+                  colors: windowCell.focusedWindow ? root.activeBorderColors : root.inactiveBorderColors
+                  angle: windowCell.focusedWindow
+                    ? root.hyprDeco.activeGradient.angle : root.hyprDeco.inactiveGradient.angle
                   opacity: 1 - root.dress
                   visible: thickness > 0 && opacity > 0.01 && !windowCell.beingDragged
                 }
@@ -2129,8 +2370,9 @@ Item {
                   }
                 }
 
-                // A hairline once it is a card, and a selection ring in the
-                // color Hyprland outlines the active window with.
+                // A hairline once it is a card, and a selection ring drawn as
+                // Hyprland outlines the active window: its colors, gradient
+                // angle and border_size.
                 Rectangle {
                   anchors.fill: parent
                   radius: windowCell.cornerRadius
@@ -2140,15 +2382,16 @@ Item {
                   opacity: root.dress
                 }
 
-                Rectangle {
-                  x: -3
-                  y: -3
-                  width: parent.width + 6
-                  height: parent.height + 6
-                  radius: windowCell.cornerRadius > 0 ? windowCell.cornerRadius + 3 : 0
-                  color: "transparent"
-                  border.width: 3
-                  border.color: root.hyprDeco.active
+                HyprBorder {
+                  x: -root.selectionBorder
+                  y: -root.selectionBorder
+                  width: parent.width + 2 * root.selectionBorder
+                  height: parent.height + 2 * root.selectionBorder
+                  innerRadius: windowCell.cornerRadius
+                  thickness: root.selectionBorder
+                  roundingPower: root.hyprDeco.power
+                  colors: root.activeBorderColors
+                  angle: root.hyprDeco.activeGradient.angle
                   opacity: windowCell.selected && !windowCell.beingDragged ? root.dress : 0
 
                   Behavior on opacity {

@@ -212,6 +212,132 @@ function workspaceIds(workspaces, wantedMonitorId, selectedWorkspaceId, managedI
   return ids
 }
 
+// A Hyprland border color as `hyprctl getoption` reports it ("ffb8603d
+// ff33ccff 45deg"), or as written in config (rgba(33ccffee), rgb(33ccff),
+// 0xff33ccff): every color stop as "#AARRGGBB" and the angle in degrees.
+// Up to ten stops, the most Omarchy's border overlay draws.
+function hyprBorderGradient(value) {
+  var tokens = String(value || "").trim().split(/\s+/)
+  var colors = []
+  var angle = 0
+  for (var i = 0; i < tokens.length; i++) {
+    var token = tokens[i]
+    var degrees = /^(-?\d+(?:\.\d+)?)deg$/i.exec(token)
+    if (degrees) { angle = Number(degrees[1]); continue }
+    var hex = ""
+    var wrapped = /^rgba?\(([0-9a-f]{6}|[0-9a-f]{8})\)$/i.exec(token)
+    if (wrapped) {
+      hex = wrapped[1].length === 6 ? "ff" + wrapped[1]
+        : wrapped[1].slice(6) + wrapped[1].slice(0, 6)
+    } else {
+      var plain = /^(?:0x)?([0-9a-f]{6}|[0-9a-f]{8})$/i.exec(token)
+      if (plain) hex = plain[1].length === 6 ? "ff" + plain[1] : plain[1]
+    }
+    if (hex && colors.length < 10) colors.push("#" + hex.toLowerCase())
+  }
+  return { colors: colors, angle: angle }
+}
+
+// The line a QML LinearGradient needs to reproduce Hyprland's border
+// gradient over a w x h border box. Hyprland's shader does not project a
+// geometric angle: for an angle in 0-90 degrees it takes
+// progress = sin(a) * y/h + (1 - sin(a)) * x/w, mirroring x, y or both for the
+// other quadrants. That is linear in x and y, so one gradient line holds it.
+function hyprGradientLine(w, h, angle) {
+  var width = Math.max(1, numberOr(w, 1))
+  var height = Math.max(1, numberOr(h, 1))
+  var degrees = ((numberOr(angle, 0) % 360) + 360) % 360
+  var flipX = degrees > 90 && degrees <= 270
+  var flipY = degrees > 180
+  var finalAngle = degrees > 270 ? 360 - degrees
+    : degrees > 180 ? degrees - 180
+    : degrees > 90 ? 180 - degrees : degrees
+  var sine = Math.sin(finalAngle * Math.PI / 180)
+  // progress = c0 + cx * x + cy * y
+  var cx = (1 - sine) / width * (flipX ? -1 : 1)
+  var cy = sine / height * (flipY ? -1 : 1)
+  var c0 = (flipX ? 1 - sine : 0) + (flipY ? sine : 0)
+  var norm = cx * cx + cy * cy
+  var x1 = -c0 * cx / norm
+  var y1 = -c0 * cy / norm
+  return { x1: x1, y1: y1, x2: x1 + cx / norm, y2: y1 + cy / norm }
+}
+
+// Hyprland's outer border radius: rounding + border_size, less the
+// correction it applies when rounding_power is under 2. Square stays square.
+function hyprOuterRadius(innerRadius, thickness, power) {
+  var inner = Math.max(0, numberOr(innerRadius, 0))
+  var border = Math.max(0, numberOr(thickness, 0))
+  if (inner <= 0) return 0
+  var correction = border * (Math.SQRT2 - 1) * Math.max(2 - numberOr(power, 2), 0)
+  return Math.max(0, inner + border - correction)
+}
+
+// An SVG rounded rectangle whose corners follow Hyprland's rounding_power:
+// |x|^p + |y|^p = r^p (2 is a circle, larger is a squircle).
+function superellipseRectPath(x, y, w, h, radius, power) {
+  var r = Math.max(0, Math.min(numberOr(radius, 0), w / 2, h / 2))
+  var exponent = 2 / Math.max(1, Math.min(10, numberOr(power, 2)))
+  function n(value) { return Math.round(value * 1000) / 1000 }
+  if (r <= 0)
+    return "M " + n(x) + " " + n(y) + " H " + n(x + w) + " V " + n(y + h)
+      + " H " + n(x) + " Z"
+  var corners = [
+    [x + w - r, y + r, -90], [x + w - r, y + h - r, 0],
+    [x + r, y + h - r, 90], [x + r, y + r, 180]
+  ]
+  var steps = 16
+  var parts = []
+  for (var c = 0; c < corners.length; c++) {
+    for (var k = 0; k <= steps; k++) {
+      var t = (corners[c][2] + 90 * k / steps) * Math.PI / 180
+      var cos = Math.cos(t)
+      var sin = Math.sin(t)
+      var px = corners[c][0] + r * (cos < 0 ? -1 : 1) * Math.pow(Math.abs(cos), exponent)
+      var py = corners[c][1] + r * (sin < 0 ? -1 : 1) * Math.pow(Math.abs(sin), exponent)
+      parts.push((parts.length === 0 ? "M " : "L ") + n(px) + " " + n(py))
+    }
+  }
+  return parts.join(" ") + " Z"
+}
+
+// The ring Hyprland paints around a window, as one even-odd SVG path over the
+// border box: the outer edge border_size out from the window, the inner edge
+// on the window's own rounded outline.
+function hyprBorderPath(w, h, innerRadius, thickness, power) {
+  var border = Math.max(0, numberOr(thickness, 0))
+  var width = Math.max(0, numberOr(w, 0))
+  var height = Math.max(0, numberOr(h, 0))
+  if (border <= 0 || width <= 2 * border || height <= 2 * border) return ""
+  return superellipseRectPath(0, 0, width, height,
+      hyprOuterRadius(innerRadius, border, power), power)
+    + " " + superellipseRectPath(border, border, width - 2 * border,
+      height - 2 * border, innerRadius, power)
+}
+
+var BAR_STYLES = ["numbers", "dots", "pills", "lines"]
+
+// Omission's own settings (omission-settings.json), chosen in the overview:
+// the bar indicator's style and whether it shows at all. Anything missing or
+// unknown falls back to the original numbered indicator, shown.
+function normalizedSettings(values) {
+  var source = values && typeof values === "object" && !Array.isArray(values)
+    ? values : {}
+  var style = String(source.barStyle || "").trim().toLowerCase()
+  return {
+    barStyle: BAR_STYLES.indexOf(style) >= 0 ? style : BAR_STYLES[0],
+    showBarSpaces: source.showBarSpaces !== false
+  }
+}
+
+// The style `step` places after `style` in BAR_STYLES, wrapping both ways.
+function nextBarStyle(style, step) {
+  var index = BAR_STYLES.indexOf(String(style))
+  if (index < 0) index = 0
+  var count = BAR_STYLES.length
+  return BAR_STYLES[((index + Math.trunc(numberOr(step, 0))) % count + count) % count]
+}
+
 function gridColumns(count, width, height) {
   var size = Math.max(0, Math.floor(numberOr(count, 0)))
   if (size <= 1) return size

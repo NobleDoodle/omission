@@ -13,10 +13,10 @@ Omission is a redesigned fork of [Mission Control](https://github.com/rmacy/omar
 - **Windows drawn as they are tiled.** The selected space appears at its real layout, scaled to fit: every window bare, at its real position and size, with Hyprland's rounding. A tall terminal stays tall; a floating window stays where you put it.
 - **Titles on hover.** A window's title appears in the same bar the space cards use, on hover or when you select it with the keyboard.
 - **A hand-over, not a fade.** Opening keeps the overlay invisible until every window has a capture and the wallpaper has decoded, then stands each card exactly on its window (wearing Hyprland's own border) and shrinks it into place. Closing reverses it. The whole motion takes about 190 ms in and 130 ms out.
-- **Outlines that match your windows.** The focused space and the selected window are ringed in the color Hyprland outlines the active window with; unfocused space cards use its inactive border color. Both are read from Hyprland, so they follow theme switches.
+- **Outlines that match your windows.** The focused space and the selected window wear Hyprland's own active-window border: its `border_size`, every color stop and the angle of a gradient `col.active_border`, and corners on the same `rounding` / `rounding_power` curve, laid out with Hyprland's own gradient and corner formulas. Unfocused space cards use its inactive border color. All of it is read from Hyprland, so it follows theme switches.
 - **Previews on a 30 fps beat** instead of running live, which keeps the overlay from redrawing the whole screen every frame.
 - **Space management.** Drag to reorder, create, remove, and rename spaces; drag a window onto a space card to send it there.
-- **A bar spaces widget** that shows exactly the spaces that exist, plus a **themed Alt-Tab switcher** for the active workspace, ordered by Hyprland focus history.
+- **A bar spaces widget** that shows exactly the spaces that exist, in one of four styles (numbers, dots, pills, or lines) or hidden, chosen from a settings panel in the overview, plus a **themed Alt-Tab switcher** for the active workspace, ordered by Hyprland focus history.
 - Uses Omarchy's active colors, typography, and application icons, and restores your normal Hyprland configuration when disabled or removed.
 
 ## What is different from Mission Control
@@ -80,6 +80,7 @@ Go to the space it is showing with a three-finger swipe **down**. `Control + Dow
 | `1` through `9` | Preview that numbered space when present |
 | `Tab` / `Shift + Tab` | Select next / previous window |
 | Window close button | Ask the application to close that window |
+| Gear at the top left, or `S` | Open the bar settings panel (below) |
 
 The plugin registers its shortcuts and gestures at runtime. If any of them replaced one of yours, disabling or removing the plugin reloads Hyprland so your own mapping returns.
 
@@ -120,6 +121,26 @@ omarchy-shell shell moveBarWidget io.github.nobledoodle.omission '{"section":"ri
 
 The widget and the stock Workspaces indicator can coexist. To let this widget take the stock slot, run `omarchy plugin disable omarchy.workspaces`; to restore the stock one, `omarchy plugin enable omarchy.workspaces --section left`. Removing the plugin only drops its own widget.
 
+### Styles and hiding
+
+Open the overview and click the gear at the top left of the strip, or press `S`. The panel sets, for every bar at once:
+
+- **Show on the bar.** Turn it off to hide the indicator; the overview and the Alt-Tab switcher keep running. The hidden widget takes no space on the bar.
+- **Style.** Each tile previews its style with your theme's colors:
+  - **Numbers**: the original look, numbers with the focused space as a glyph, custom names in place of numbers.
+  - **Dots**: 8 px dots; the focused space grows into a 16 px accent pill over 90 ms. This is the design of [Workspace Dots](https://github.com/voyagen/oma-dots) by Voyagen.
+  - **Pills**: numbers (or names) in rounded badges; the focused badge is filled with the accent color, empty spaces are outlined.
+  - **Lines**: short bars; the focused one is longer and accent colored, empty spaces fainter.
+
+With the panel open, `1` to `4` or the arrow keys pick a style, `Space` or `Enter` shows or hides the indicator, and `S`, `Q`, or `Escape` close the panel. A click outside the panel closes it too. Dots and lines show custom names as tooltips.
+
+The choice is saved by the plugin service in `~/.local/state/omarchy/omission-settings.json` (`{"barStyle": "dots", "showBarSpaces": true}`) and applied to every bar immediately. It can also be set from a script:
+
+```bash
+omarchy-shell io.github.nobledoodle.omission-state barStyle lines
+omarchy-shell io.github.nobledoodle.omission-state showBarSpaces false
+```
+
 ## Use: the Alt-Tab switcher
 
 The switcher is bound to the two chords it intentionally replaces:
@@ -146,7 +167,7 @@ Omarchy shell plugins are unsandboxed. This plugin loads a persistent `service`,
 
 The service:
 
-- Owns `~/.local/state/omarchy/omission-spaces.json` and `~/.local/state/omarchy/omission-space-names.json`, and renumbers Hyprland workspace IDs to match managed spaces. It never writes to `~/.config/omarchy/shell.json` or `bar.layout`; bar-widget placement happens only through Omarchy's own plugin commands when you run them.
+- Owns `~/.local/state/omarchy/omission-spaces.json`, `~/.local/state/omarchy/omission-space-names.json`, and `~/.local/state/omarchy/omission-settings.json`, and renumbers Hyprland workspace IDs to match managed spaces. It never writes to `~/.config/omarchy/shell.json` or `bar.layout`; bar-widget placement happens only through Omarchy's own plugin commands when you run them.
 - Registers the `Control+Up` and `Control+Down` shortcuts and the three-finger swipe-up and swipe-down gestures at runtime through `hyprctl eval`. The bindings run fixed `omarchy-shell -q shell …` command lines through Hyprland's `exec_cmd`. This replaces any three-finger vertical gestures you configured, until the plugin is disabled.
 - Registers one Hyprland layer rule (`hl.layer_rule`) that turns off Hyprland's fade for the overview's own layer namespace, `omission`, so the hand-over is not washed out by a second animation.
 - Intentionally replaces the configured `Alt+Tab` and `Alt+Shift+Tab` chords while enabled, with owner-guarded Hyprland Lua callbacks and a temporary switcher submap, bounded Alt-state polling, and coalesced navigation.
@@ -154,7 +175,7 @@ The service:
 - Tears down through one serialized `sh -c` chain (Alt-Tab cleanup, then host cleanup, then exactly one final `hyprctl reload` that restores configured bindings), with no fixed sleep and no independent second cleanup process.
 - Uses `notify-send` only if binding registration fails after bounded retries.
 
-The overlay reads Quickshell's native Hyprland toplevel model and drives workspace renumbering and window moves with `hyprctl eval`. After you activate a window or space it sends a fixed `hl.dsp.focus(...)` expression, built only from a validated hexadecimal stable ID or a workspace number, over Hyprland's IPC socket through Quickshell's own `Hyprland.dispatch`, once Hyprland reports the overlay's layer closed. On startup and after a config reload it runs one read-only `hyprctl --batch` to read `general:border_size`, `general:col.active_border`, and `general:col.inactive_border` for the outlines. For desktop thumbnails it executes the bundled `bin/background-source` helper, a read-only Bash script that inspects local process metadata under `/proc` and the Omarchy current-background state link and canonicalizes wallpaper candidates with coreutils `realpath`. It also loads the current wallpaper image file. Neither the overlay nor the helper performs network requests, privileged commands, package installation, or filesystem writes.
+The overlay reads Quickshell's native Hyprland toplevel model and drives workspace renumbering and window moves with `hyprctl eval`. After you activate a window or space it sends a fixed `hl.dsp.focus(...)` expression, built only from a validated hexadecimal stable ID or a workspace number, over Hyprland's IPC socket through Quickshell's own `Hyprland.dispatch`, once Hyprland reports the overlay's layer closed. On startup and after a config reload it runs one read-only `hyprctl --batch` to read `general:border_size`, `general:col.active_border`, `general:col.inactive_border`, `decoration:rounding`, and `decoration:rounding_power` for the outlines and corners. For desktop thumbnails it executes the bundled `bin/background-source` helper, a read-only Bash script that inspects local process metadata under `/proc` and the Omarchy current-background state link and canonicalizes wallpaper candidates with coreutils `realpath`. It also loads the current wallpaper image file. Neither the overlay nor the helper performs network requests, privileged commands, package installation, or filesystem writes.
 
 The bar widget renders from the same in-process service and writes nothing. Clicking a space sends one `hl.dsp.focus(...)` expression, built only from a workspace number from 1 to 10, through Quickshell's `Hyprland.dispatch`; no shell is involved.
 
@@ -217,6 +238,8 @@ Live window pixels are provided directly by Hyprland's capture protocol to Quick
 
 Omission is derived from [Mission Control](https://github.com/rmacy/omarchy-mission-control) by Ryan Macy (MIT), taken at commit `cca9ad6`. The window model, space management, bar widget, wallpaper helper, and Alt-Tab switcher are his work, and the fixes listed above were found while building on it. Thank you.
 
+The bar's Dots style follows [Workspace Dots](https://github.com/voyagen/oma-dots) by Voyagen (MIT): its dot and pill sizes, spacing, and 90 ms motion.
+
 ## License
 
-[MIT](LICENSE). Copyright © 2026 NobleDoodle, and © 2026 Ryan Macy for the code this derives from.
+[MIT](LICENSE). Copyright © 2026 NobleDoodle, © 2026 Ryan Macy for the code this derives from, and © 2026 Voyagen for the Dots style.

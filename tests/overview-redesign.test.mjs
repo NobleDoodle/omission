@@ -42,7 +42,7 @@ test("the space strip spans the screen over a cached blur of the wallpaper", () 
 test("windows move from their real place to the tiled stage, bare and rounded", () => {
   assert.match(stage, /windowCell\.realRect\.x\s*\+ \(windowCell\.targetRect\.x - windowCell\.realRect\.x\) \* root\.revealProgress/)
   assert.match(stage, /ClippingRectangle \{[\s\S]*?color: "transparent"/)
-  assert.match(stage, /border\.color: windowCell\.focusedWindow\s*\? root\.hyprDeco\.active : root\.hyprDeco\.inactive/)
+  assert.match(stage, /colors: windowCell\.focusedWindow \? root\.activeBorderColors : root\.inactiveBorderColors/)
   assert.doesNotMatch(stage, /id: previewFrame|chromeHeight|root\.cellWidth/)
 })
 
@@ -71,8 +71,14 @@ test("hyprland's layer fade is disabled for the overlay, once per Lua state", ()
   assert.match(service, /hl\.layer_rule\(\{ match = \{ namespace = "\^omission\$" \}, no_anim = true, animation = "none" \}\)/)
 })
 
-test("the selection ring is the active window's outline color", () => {
-  assert.match(stage, /border\.width: 3\s*border\.color: root\.hyprDeco\.active/)
+test("the selection ring is the active window's outline: colors, gradient angle, border_size", () => {
+  assert.match(qml, /next\.activeGradient = WindowModel\.hyprBorderGradient\(value\)/)
+  assert.match(qml, /next\.inactiveGradient = WindowModel\.hyprBorderGradient\(value\)/)
+  assert.match(qml, /next\.power = Math\.max\(1, Math\.min\(10, Number\(value\)\)\)/)
+  assert.match(qml, /j\/getoption decoration:rounding_power/)
+  assert.match(qml, /readonly property real selectionBorder: Number\(root\.hyprDeco\.border\) > 0\s*\? Number\(root\.hyprDeco\.border\) : 2/)
+  assert.match(stage, /HyprBorder \{\s*x: -root\.selectionBorder[\s\S]*?innerRadius: windowCell\.cornerRadius\s*thickness: root\.selectionBorder\s*roundingPower: root\.hyprDeco\.power\s*colors: root\.activeBorderColors\s*angle: root\.hyprDeco\.activeGradient\.angle\s*opacity: windowCell\.selected/)
+  assert.doesNotMatch(qml, /border\.width: 3\s*border\.color: root\.hyprDeco\.active/, "no fixed 3 px single-color ring")
   assert.doesNotMatch(qml, /themeSelectionColor/)
 })
 
@@ -120,11 +126,9 @@ test("focus changes wait for the overlay to unmap, then dispatch in-process", ()
 
 test("the focused space is ringed like the focused window", () => {
   const chip = qml.slice(qml.indexOf("id: workspaceChip"), qml.indexOf("id: removeSpaceButton"))
-  const ring = chip.match(/Rectangle \{\s*x: -3\s*y: -3[\s\S]*?\n                \}\n/)?.[0] || ""
-  assert.match(ring, /border\.width: 3\s*border\.color: root\.hyprDeco\.active\s*opacity: workspaceChip\.selected \? 1 : 0/)
-  // Square when Hyprland's windows are square, as Hyprland's own border is.
-  assert.match(ring, /radius: workspaceChip\.radius > 0 \? workspaceChip\.radius \+ 3 : 0/)
-  const windowRing = stage.match(/x: -3\s*y: -3[\s\S]*?border\.color: root\.hyprDeco\.active/)?.[0] || ""
+  const ring = chip.match(/HyprBorder \{\s*x: -root\.selectionBorder[\s\S]*?\n                \}\n/)?.[0] || ""
+  assert.match(ring, /innerRadius: workspaceChip\.radius\s*thickness: root\.selectionBorder[\s\S]*?colors: root\.activeBorderColors[\s\S]*?opacity: workspaceChip\.selected \? 1 : 0/)
+  const windowRing = stage.match(/x: -root\.selectionBorder[\s\S]*?colors: root\.activeBorderColors/)?.[0] || ""
   assert.ok(windowRing, "the window ring is the model")
   assert.doesNotMatch(chip, /workspaceChip\.windowDropTarget \|\| workspaceChip\.selected\s*\? root\.selectedBorderColor : Util\.alpha/, "no faint inner ring for the selected space")
 })
@@ -156,13 +160,36 @@ test("an inactive space card is outlined in Hyprland's inactive window border co
 })
 
 test("space cards and windows take their corners from Hyprland's rounding", () => {
-  assert.match(qml, /"j\/getoption decoration:rounding"/)
+  assert.match(qml, /"j\/getoption decoration:rounding ; j\/getoption decoration:rounding_power"/)
   assert.match(qml, /entry\.option === "decoration:rounding" && isFinite\(Number\(value\)\)\)\s*\n\s*next\.rounding = Math\.max\(0, Math\.min\(100, Number\(value\)\)\)/)
   const chip = qml.slice(qml.indexOf("id: workspaceChip"), qml.indexOf("id: removeSpaceButton"))
   assert.match(chip, /radius: root\.hyprRounding\n/, "a space card wears the rounding as is")
   assert.doesNotMatch(chip, /radius: Math\.max\(/, "no minimum radius on a space card")
   assert.match(qml, /radius: \{[\s\S]*?root\.hyprRounding \* thumbnailWindow\.width \/ realWidth : 0\s*\}/, "mini windows scale it")
   assert.match(stage, /readonly property real cornerRadius: root\.hyprRounding\s*\n\s*\* \(windowCell\.realRect \? windowCell\.width \/ windowCell\.realRect\.width : 1\)/)
-  assert.match(stage, /radius: windowCell\.cornerRadius > 0 \? windowCell\.cornerRadius \+ thickness : 0/)
-  assert.match(stage, /radius: windowCell\.cornerRadius > 0 \? windowCell\.cornerRadius \+ 3 : 0/)
+  assert.match(qml, /readonly property real hyprRounding: Math\.max\(0, Number\(root\.hyprDeco\.rounding\) \|\| 0\)\s*\* root\.hyprDeco\.power \/ 2/, "scaled by rounding_power / 2, as Hyprland scales it")
+  assert.equal((stage.match(/innerRadius: windowCell\.cornerRadius/g) || []).length, 2, "both window rings follow the card's corners")
+})
+
+test("a gear at the strip's top left, or S, opens the bar settings panel", () => {
+  const rail = qml.slice(qml.indexOf("id: workspaceRail"), qml.indexOf("id: windowGrid"))
+  assert.match(rail, /id: settingsButton\s*anchors\.left: parent\.left\s*anchors\.top: parent\.top/)
+  assert.match(rail, /text: "\\uF013"/)
+  assert.match(rail, /onClicked: root\.toggleSettings\(\)/)
+  assert.match(qml, /event\.key === Qt\.Key_S && event\.modifiers === Qt\.NoModifier\) \{\s*root\.settingsOpen = true/)
+  assert.match(qml, /if \(root\.settingsOpen\) \{\s*root\.handleSettingsKey\(event\)\s*event\.accepted = true\s*return/)
+  assert.match(qml, /Ui\.Toggle \{[\s\S]*?checked: root\.omissionSettings\.showBarSpaces[\s\S]*?onClicked: root\.setShowBarSpaces\(!checked\)/)
+  assert.match(qml, /model: WindowModel\.BAR_STYLES/)
+  // Closing or resetting the overview always closes the panel too.
+  assert.equal((qml.match(/root\.settingsOpen = false\n/g) || []).length >= 3, true)
+})
+
+test("the service owns the settings file the bar and overview bind to", () => {
+  assert.match(service, /"\/\.local\/state\/omarchy\/omission-settings\.json"/)
+  assert.match(service, /id: settingsFile[\s\S]*?atomicWrites: true[\s\S]*?onLoaded: root\.loadSettings\(text\(\)\)/)
+  assert.match(service, /var next = WindowModel\.normalizedSettings\(merged\)/)
+  const bar = readFileSync(new URL("../BarWidget.qml", import.meta.url), "utf8")
+  assert.match(bar, /root\.spaceService\.settingsLoaded \? root\.spaceService\.settings : null/)
+  assert.match(bar, /readonly property var shownIds: showSpaces \? spaceIds : \[\]/)
+  assert.match(bar, /visible: shownIds\.length > 0/)
 })

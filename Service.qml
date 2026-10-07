@@ -26,6 +26,11 @@ Item {
     + "/.local/state/omarchy/omission-space-names.json"
   property var spaceNames: ({})
   property bool namesLoaded: false
+  // The overview's settings panel writes these; every bar instance binds them.
+  readonly property string settingsPath: Quickshell.env("HOME")
+    + "/.local/state/omarchy/omission-settings.json"
+  property var settings: WindowModel.normalizedSettings({})
+  property bool settingsLoaded: false
 
   function normalizedManagedSpaces(values) {
     return WindowModel.workspaceIds([], -1, -1, values)
@@ -103,6 +108,34 @@ Item {
   function remapNames(currentIds, desiredIds) {
     return root.setSpaceNames(
       WindowModel.remapSpaceNames(root.spaceNames, currentIds, desiredIds))
+  }
+
+  function loadSettings(raw) {
+    var values = ({})
+    try { values = JSON.parse(String(raw || "{}")) } catch (_error) { }
+    var next = WindowModel.normalizedSettings(values)
+    if (JSON.stringify(next) !== JSON.stringify(root.settings))
+      root.settings = next
+    root.settingsLoaded = true
+  }
+
+  function setSettings(changes) {
+    var merged = JSON.parse(JSON.stringify(root.settings))
+    for (var key in changes) merged[key] = changes[key]
+    var next = WindowModel.normalizedSettings(merged)
+    if (JSON.stringify(next) !== JSON.stringify(root.settings))
+      root.settings = next
+    root.settingsLoaded = true
+    settingsFile.setText(JSON.stringify(next) + "\n")
+    return next
+  }
+
+  function setBarStyle(style) {
+    return root.setSettings({ barStyle: String(style || "") })
+  }
+
+  function setShowBarSpaces(shown) {
+    return root.setSettings({ showBarSpaces: shown === true })
   }
 
   function removeGestureLua() {
@@ -262,6 +295,20 @@ Item {
     onFileChanged: reload()
   }
 
+  FileView {
+    id: settingsFile
+    path: root.settingsPath
+    watchChanges: true
+    printErrors: false
+    atomicWrites: true
+    onLoaded: root.loadSettings(text())
+    onLoadFailed: if (!root.settingsLoaded) {
+      root.settings = WindowModel.normalizedSettings({})
+      root.settingsLoaded = true
+    }
+    onFileChanged: reload()
+  }
+
   IpcHandler {
     target: "io.github.nobledoodle.omission-state"
 
@@ -297,6 +344,20 @@ Item {
 
     function clearNames(): string {
       return JSON.stringify(root.setSpaceNames(({})))
+    }
+
+    function settings(): string {
+      return JSON.stringify(root.settings)
+    }
+
+    function barStyle(style: string): string {
+      if (WindowModel.BAR_STYLES.indexOf(String(style)) < 0) return "invalid"
+      return JSON.stringify(root.setBarStyle(style))
+    }
+
+    function showBarSpaces(shown: string): string {
+      if (shown !== "true" && shown !== "false") return "invalid"
+      return JSON.stringify(root.setShowBarSpaces(shown === "true"))
     }
   }
 

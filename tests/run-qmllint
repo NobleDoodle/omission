@@ -33,4 +33,6 @@ ln -s "$plugin_dir" "$tmp/plugin"
   "$plugin_dir/AltTabService.qml" \
   "$plugin_dir/Overview.qml" \
   "$plugin_dir/Service.qml" \
-  "$plugin_dir/BarWidget.qml"
+  "$plugin_dir/BarWidget.qml" \
+  "$plugin_dir/SpaceMark.qml" \
+  "$plugin_dir/HyprBorder.qml"

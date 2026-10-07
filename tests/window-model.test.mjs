@@ -20,7 +20,7 @@ const exported = [
   "nextGridIndex", "nextFreeWorkspaceId", "moveArrayValue", "reassignPlan",
   "removalNeighbor", "remapWorkspaceIds", "normalizedSpaceName",
   "remapSpaceNames", "spaceCardIndexAt", "shortenedTitle",
-  "spatialNeighborIndex"
+  "spatialNeighborIndex", "BAR_STYLES", "normalizedSettings", "nextBarStyle", "hyprBorderGradient", "hyprGradientLine", "hyprOuterRadius", "superellipseRectPath", "hyprBorderPath"
 ]
 
 const source = readFileSync(modelUrl, "utf8")
@@ -369,4 +369,93 @@ test("arrow keys move through the tiled layout by geometry", () => {
   assert.equal(model.spatialNeighborIndex(rects, -1, 1, 0), 0, "nothing selected picks the first")
   assert.equal(model.spatialNeighborIndex([], 0, 1, 0), -1)
   assert.equal(model.spatialNeighborIndex(rects, 1, 0, 0), 1)
+})
+
+test("settings fall back to the numbered indicator, shown", () => {
+  const defaults = { barStyle: "numbers", showBarSpaces: true }
+  assert.deepEqual(Array.from(model.BAR_STYLES), ["numbers", "dots", "pills", "lines"])
+  for (const raw of [undefined, null, "dots", [], {}, { barStyle: "stars" }, { barStyle: 3 }])
+    assert.deepEqual({ ...model.normalizedSettings(raw) }, defaults)
+  assert.deepEqual({ ...model.normalizedSettings({ barStyle: " Dots ", showBarSpaces: false }) },
+    { barStyle: "dots", showBarSpaces: false })
+  assert.equal(model.normalizedSettings({ showBarSpaces: "false" }).showBarSpaces, true)
+  assert.equal(model.normalizedSettings({ showBarSpaces: 0 }).showBarSpaces, true)
+  assert.equal("extra" in model.normalizedSettings({ barStyle: "lines", extra: 1 }), false)
+})
+
+test("bar styles cycle in order and wrap both ways", () => {
+  assert.equal(model.nextBarStyle("numbers", 1), "dots")
+  assert.equal(model.nextBarStyle("lines", 1), "numbers")
+  assert.equal(model.nextBarStyle("numbers", -1), "lines")
+  assert.equal(model.nextBarStyle("pills", 6), "numbers")
+  assert.equal(model.nextBarStyle("dots", 0), "dots")
+  assert.equal(model.nextBarStyle("unknown", 1), "dots")
+  assert.equal(model.nextBarStyle("dots", "x"), "dots")
+})
+
+test("Hyprland border colors keep every gradient stop and the angle", () => {
+  const plain = (value) => ({ ...model.hyprBorderGradient(value), colors: Array.from(model.hyprBorderGradient(value).colors) })
+  assert.deepEqual(plain("ffb8603d 0deg"), { colors: ["#ffb8603d"], angle: 0 })
+  assert.deepEqual(plain("ee33ccff ee00ff99 45deg"), { colors: ["#ee33ccff", "#ee00ff99"], angle: 45 })
+  assert.deepEqual(plain("rgba(33ccffee) rgb(00FF99) -90.5deg"),
+    { colors: ["#ee33ccff", "#ff00ff99"], angle: -90.5 })
+  assert.deepEqual(plain("0xff123456 abcdef"), { colors: ["#ff123456", "#ffabcdef"], angle: 0 })
+  assert.deepEqual(plain(""), { colors: [], angle: 0 })
+  assert.deepEqual(plain(null), { colors: [], angle: 0 })
+  assert.deepEqual(plain("red 12 rgba(zz) 1234567"), { colors: [], angle: 0 })
+  assert.equal(model.hyprBorderGradient(Array(12).fill("ff000000").join(" ")).colors.length, 10)
+})
+
+// Hyprland's shader: progress = sin(a) * y/h + (1 - sin(a)) * x/w for a in
+// 0-90 degrees, mirrored for the other quadrants.
+function hyprProgress(x, y, w, h, angle) {
+  let a = ((angle % 360) + 360) % 360
+  let nx = x / w, ny = y / h
+  if (a > 270) { ny = 1 - ny; a = 360 - a }
+  else if (a > 180) { nx = 1 - nx; ny = 1 - ny; a = a - 180 }
+  else if (a > 90) { nx = 1 - nx; a = 180 - a }
+  const s = Math.sin(a * Math.PI / 180)
+  return ny * s + nx * (1 - s)
+}
+
+test("the border gradient line reproduces Hyprland's progress at every angle", () => {
+  const w = 941, h = 508
+  for (const angle of [0, 30, 45, 90, 135, 180, 225, 270, 300, 359, -45, 405]) {
+    const line = model.hyprGradientLine(w, h, angle)
+    const dx = line.x2 - line.x1, dy = line.y2 - line.y1
+    for (const [x, y] of [[0, 0], [w, 0], [0, h], [w, h], [300, 120], [w / 2, h / 2]]) {
+      const ours = ((x - line.x1) * dx + (y - line.y1) * dy) / (dx * dx + dy * dy)
+      assert.ok(Math.abs(ours - hyprProgress(x, y, w, h, angle)) < 1e-9, `angle ${angle} at ${x},${y}`)
+    }
+  }
+  assert.ok(isFinite(model.hyprGradientLine(0, 0, "x").x2))
+})
+
+test("the outer border radius follows Hyprland's rounding_power correction", () => {
+  assert.equal(model.hyprOuterRadius(9, 4, 2), 13)
+  assert.equal(model.hyprOuterRadius(13.5, 4, 3), 17.5)
+  assert.ok(Math.abs(model.hyprOuterRadius(6.75, 4, 1.5) - (10.75 - 4 * (Math.SQRT2 - 1) * 0.5)) < 1e-9)
+  assert.equal(model.hyprOuterRadius(0, 4, 1.5), 0, "square windows keep a square border")
+  assert.equal(model.hyprOuterRadius(-1, "x", undefined), 0)
+})
+
+test("superellipse corners sit on |x|^p + |y|^p = r^p", () => {
+  assert.equal(model.superellipseRectPath(1, 2, 10, 20, 0, 2), "M 1 2 H 11 V 22 H 1 Z")
+  const path = model.superellipseRectPath(0, 0, 100, 60, 10, 1.5)
+  const points = [...path.matchAll(/[ML] (-?[\d.]+) (-?[\d.]+)/g)].map(m => [Number(m[1]), Number(m[2])])
+  assert.equal(points.length, 68)
+  for (const [x, y] of points.filter(([x, y]) => x <= 10 && y <= 10)) {
+    const value = Math.pow(Math.abs(10 - x) / 10, 1.5) + Math.pow(Math.abs(10 - y) / 10, 1.5)
+    assert.ok(Math.abs(value - 1) < 0.01, `${x},${y}`)
+  }
+  assert.match(model.superellipseRectPath(0, 0, 10, 10, 50, 2), /^M 5 0 L/, "radius clamps to half the side")
+})
+
+test("the border ring is the outer and inner outline as one even-odd path", () => {
+  assert.equal(model.hyprBorderPath(100, 60, 9, 0, 2), "")
+  assert.equal(model.hyprBorderPath(8, 60, 9, 4, 2), "")
+  const ring = model.hyprBorderPath(100, 60, 9, 4, 2)
+  assert.equal((ring.match(/Z/g) || []).length, 2)
+  assert.ok(ring.startsWith(model.superellipseRectPath(0, 0, 100, 60, 13, 2)))
+  assert.ok(ring.endsWith(model.superellipseRectPath(4, 4, 92, 52, 9, 2)))
 })
