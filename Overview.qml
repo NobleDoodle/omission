@@ -114,9 +114,15 @@ Item {
     active: Qt.rgba(0.91, 0.74, 0.45, 1),
     inactive: Qt.rgba(0.35, 0.35, 0.35, 0.67),
     power: 2,
+    workspaceGap: 0,
+    wraparound: false,
     activeGradient: ({ colors: [], angle: 0 }),
     inactiveGradient: ({ colors: [], angle: 0 })
   })
+  // `hyprctl -j animations`, re-read with the decoration values: the space
+  // switch below moves with the same workspacesIn / workspacesOut animation
+  // Hyprland uses (style, speed, curve).
+  property var hyprAnimations: null
   // Hyprland's own window borders, drawn by HyprBorder: every stop and the
   // angle of col.active_border / col.inactive_border, at general:border_size.
   readonly property var activeBorderColors: root.hyprDeco.activeGradient.colors.length > 0
@@ -297,6 +303,8 @@ Item {
       active: root.hyprDeco.active,
       inactive: root.hyprDeco.inactive,
       power: root.hyprDeco.power,
+      workspaceGap: root.hyprDeco.workspaceGap,
+      wraparound: root.hyprDeco.wraparound,
       activeGradient: root.hyprDeco.activeGradient,
       inactiveGradient: root.hyprDeco.inactiveGradient
     }
@@ -314,6 +322,10 @@ Item {
         next.rounding = Math.max(0, Math.min(100, Number(value)))
       else if (entry.option === "decoration:rounding_power" && isFinite(Number(value)))
         next.power = Math.max(1, Math.min(10, Number(value)))
+      else if (entry.option === "general:gaps_workspaces" && isFinite(Number(value)))
+        next.workspaceGap = Math.max(0, Math.min(500, Number(value)))
+      else if (entry.option === "animations:workspace_wraparound")
+        next.wraparound = Number(value) === 1
       else if (entry.option === "general:col.active_border") {
         next.active = root.hyprColor(value, next.active)
         next.activeGradient = WindowModel.hyprBorderGradient(value)
@@ -327,6 +339,14 @@ Item {
 
   function readHyprDeco() {
     if (!hyprDecoProcess.running) hyprDecoProcess.running = true
+    if (!hyprAnimationsProcess.running) hyprAnimationsProcess.running = true
+  }
+
+  function applyHyprAnimations(text) {
+    try {
+      var parsed = JSON.parse(String(text || ""))
+      if (Array.isArray(parsed)) root.hyprAnimations = parsed
+    } catch (_error) { }
   }
 
   Component.onCompleted: root.readHyprDeco()
@@ -336,9 +356,18 @@ Item {
     environment: root.trustedEnvironment
     command: ["hyprctl", "--batch", "j/getoption general:border_size ; "
       + "j/getoption general:col.active_border ; j/getoption general:col.inactive_border ; "
-      + "j/getoption decoration:rounding ; j/getoption decoration:rounding_power"]
+      + "j/getoption decoration:rounding ; j/getoption decoration:rounding_power ; "
+      + "j/getoption general:gaps_workspaces ; j/getoption animations:workspace_wraparound"]
     stdout: StdioCollector { id: hyprDecoStdout; waitForEnd: true }
     onExited: function(exitCode) { if (exitCode === 0) root.applyHyprDeco(hyprDecoStdout.text) }
+  }
+
+  Process {
+    id: hyprAnimationsProcess
+    environment: root.trustedEnvironment
+    command: ["hyprctl", "-j", "animations"]
+    stdout: StdioCollector { id: hyprAnimationsStdout; waitForEnd: true }
+    onExited: function(exitCode) { if (exitCode === 0) root.applyHyprAnimations(hyprAnimationsStdout.text) }
   }
 
   Connections {
@@ -689,6 +718,7 @@ Item {
     stageFreezeFrame.stop()
     stageThawTimer.stop()
     root.stageFrozen = false
+    root.finishStageSwitch()
     root.selectedIndex = -1
     root.editingWorkspaceId = -1
     root.settingsOpen = false
@@ -705,6 +735,7 @@ Item {
     if (!root.opened || root.closing) return
     root.editingWorkspaceId = -1
     root.settingsOpen = false
+    root.finishStageSwitch()
     root.windowDragActive = false
     thumbnailCaptureTimer.stop()
     thumbnailCaptureBatchTimer.stop()
@@ -722,6 +753,12 @@ Item {
   function selectWorkspace(workspaceId) {
     var nextId = Number(workspaceId)
     if (nextId <= 0 || nextId === root.selectedWorkspaceId) return
+    root.finishStageSwitch()
+    var openIds = []
+    var open = Hyprland.workspaces.values
+    for (var i = 0; i < open.length; i++) if (open[i]) openIds.push(open[i].id)
+    root.switchLeft = WindowModel.workspaceSlideLeft(nextId, root.selectedWorkspaceId,
+      openIds, root.hyprDeco.wraparound)
     root.selectedWorkspaceId = nextId
     if (stageFreezeFrame.running) {
       // The snapshot is being taken; the swap it is waiting for picks up
@@ -755,7 +792,85 @@ Item {
 
   function thawStage() {
     stageThawTimer.stop()
+    var switching = root.stageFrozen
     root.stageFrozen = false
+    if (switching) root.startStageSwitch()
+  }
+
+  // Once the new space's cards are ready, the outgoing snapshot and the new
+  // stage move as Hyprland moves the two workspaces: workspacesOut for the
+  // one left behind, workspacesIn for the one arriving, each with its own
+  // style, duration and curve, and the direction Hyprland would take.
+  property bool stageSwitching: false
+  property bool switchLeft: true
+  property var switchIn: null
+  property var switchOut: null
+  property real switchInProgress: 1
+  property real switchOutProgress: 1
+  readonly property var switchInMotion: root.stageSwitching && root.switchIn ? root.switchIn.motion : null
+  readonly property var switchOutMotion: root.stageSwitching && root.switchOut ? root.switchOut.motion : null
+
+  function switchSide(name, entering) {
+    var animation = WindowModel.hyprAnimation(root.hyprAnimations, name)
+    return {
+      duration: animation.enabled ? animation.duration : 0,
+      curve: animation.bezier.concat([1, 1]),
+      motion: WindowModel.workspaceSwitchMotion(animation.style, entering, root.switchLeft,
+        windowGrid.width, windowGrid.height, root.hyprDeco.workspaceGap)
+    }
+  }
+
+  function startStageSwitch() {
+    if (!root.opened || root.closing) return
+    root.switchIn = root.switchSide("workspacesIn", true)
+    root.switchOut = root.switchSide("workspacesOut", false)
+    if (root.switchIn.duration <= 0 && root.switchOut.duration <= 0) return
+    root.switchInProgress = 0
+    root.switchOutProgress = 0
+    root.stageSwitching = true
+    switchInAnimation.restart()
+    switchOutAnimation.restart()
+  }
+
+  function finishStageSwitch() {
+    switchInAnimation.stop()
+    switchOutAnimation.stop()
+    root.switchInProgress = 1
+    root.switchOutProgress = 1
+    root.stageSwitching = false
+  }
+
+  function finishStageSwitchIfDone() {
+    if (!switchInAnimation.running && !switchOutAnimation.running) root.finishStageSwitch()
+  }
+
+  function switchValue(motion, key, progress) {
+    if (!motion) return key === "Alpha" ? 1 : 0
+    return motion["from" + key] + (motion["to" + key] - motion["from" + key]) * progress
+  }
+
+  NumberAnimation {
+    id: switchInAnimation
+    target: root
+    property: "switchInProgress"
+    from: 0
+    to: 1
+    duration: root.switchIn ? root.switchIn.duration : 0
+    easing.type: Easing.BezierSpline
+    easing.bezierCurve: root.switchIn ? root.switchIn.curve : [0, 0, 1, 1, 1, 1]
+    onFinished: root.finishStageSwitchIfDone()
+  }
+
+  NumberAnimation {
+    id: switchOutAnimation
+    target: root
+    property: "switchOutProgress"
+    from: 0
+    to: 1
+    duration: root.switchOut ? root.switchOut.duration : 0
+    easing.type: Easing.BezierSpline
+    easing.bezierCurve: root.switchOut ? root.switchOut.curve : [0, 0, 1, 1, 1, 1]
+    onFinished: root.finishStageSwitchIfDone()
   }
 
   onStageCapturedChanged: root.thawStageIfCaptured()
@@ -1491,6 +1606,9 @@ Item {
 
         Rectangle {
           id: workspaceRail
+          // Over the moving stage while spaces switch, so a vertical slide
+          // passes under the strip as it passes under nothing on the desktop.
+          z: root.stageSwitching ? 3 : 0
           opacity: root.revealProgress
           scale: 1
           readonly property real monitorAspect: root.overviewMonitor
@@ -2133,7 +2251,12 @@ Item {
         Item {
           id: windowGrid
           anchors.fill: parent
-          opacity: root.stageFrozen ? 0 : 1
+          opacity: root.stageFrozen ? 0
+            : root.switchValue(root.switchInMotion, "Alpha", root.switchInProgress)
+          transform: Translate {
+            x: root.switchValue(root.switchInMotion, "X", root.switchInProgress)
+            y: root.switchValue(root.switchInMotion, "Y", root.switchInProgress)
+          }
 
           Repeater {
             id: windowRepeater
@@ -2560,7 +2683,13 @@ Item {
           height: windowGrid.height
           z: windowGrid.z + 1
           readonly property bool active: root.stageFrozen || stageFreezeFrame.running
+            || root.stageSwitching
           visible: active
+          opacity: root.switchValue(root.switchOutMotion, "Alpha", root.switchOutProgress)
+          transform: Translate {
+            x: root.switchValue(root.switchOutMotion, "X", root.switchOutProgress)
+            y: root.switchValue(root.switchOutMotion, "Y", root.switchOutProgress)
+          }
           sourceItem: active ? windowGrid : null
           live: false
           hideSource: false

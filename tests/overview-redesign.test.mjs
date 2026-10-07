@@ -160,7 +160,7 @@ test("an inactive space card is outlined in Hyprland's inactive window border co
 })
 
 test("space cards and windows take their corners from Hyprland's rounding", () => {
-  assert.match(qml, /"j\/getoption decoration:rounding ; j\/getoption decoration:rounding_power"/)
+  assert.match(qml, /"j\/getoption decoration:rounding ; j\/getoption decoration:rounding_power ; "/)
   assert.match(qml, /entry\.option === "decoration:rounding" && isFinite\(Number\(value\)\)\)\s*\n\s*next\.rounding = Math\.max\(0, Math\.min\(100, Number\(value\)\)\)/)
   const chip = qml.slice(qml.indexOf("id: workspaceChip"), qml.indexOf("id: removeSpaceButton"))
   assert.match(chip, /radius: root\.hyprRounding\n/, "a space card wears the rounding as is")
@@ -192,4 +192,16 @@ test("the service owns the settings file the bar and overview bind to", () => {
   assert.match(bar, /root\.spaceService\.settingsLoaded \? root\.spaceService\.settings : null/)
   assert.match(bar, /readonly property var shownIds: showSpaces \? spaceIds : \[\]/)
   assert.match(bar, /visible: shownIds\.length > 0/)
+})
+
+test("switching spaces moves the stage with Hyprland's workspace animation", () => {
+  assert.match(qml, /command: \["hyprctl", "-j", "animations"\]/)
+  assert.match(qml, /j\/getoption general:gaps_workspaces ; j\/getoption animations:workspace_wraparound/)
+  assert.match(qml, /root\.switchIn = root\.switchSide\("workspacesIn", true\)\s*root\.switchOut = root\.switchSide\("workspacesOut", false\)/)
+  assert.match(qml, /root\.switchLeft = WindowModel\.workspaceSlideLeft\(nextId, root\.selectedWorkspaceId,\s*openIds, root\.hyprDeco\.wraparound\)/)
+  assert.match(qml, /easing\.type: Easing\.BezierSpline/)
+  assert.match(stage, /id: windowGrid[\s\S]*?transform: Translate \{\s*x: root\.switchValue\(root\.switchInMotion, "X", root\.switchInProgress\)/)
+  assert.match(qml, /id: stageSnapshot[\s\S]*?\|\| root\.stageSwitching[\s\S]*?x: root\.switchValue\(root\.switchOutMotion, "X", root\.switchOutProgress\)/)
+  // Disabled in Hyprland means an instant cut here too.
+  assert.match(qml, /duration: animation\.enabled \? animation\.duration : 0/)
 })

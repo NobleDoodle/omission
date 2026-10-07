@@ -20,7 +20,7 @@ const exported = [
   "nextGridIndex", "nextFreeWorkspaceId", "moveArrayValue", "reassignPlan",
   "removalNeighbor", "remapWorkspaceIds", "normalizedSpaceName",
   "remapSpaceNames", "spaceCardIndexAt", "shortenedTitle",
-  "spatialNeighborIndex", "BAR_STYLES", "normalizedSettings", "nextBarStyle", "hyprBorderGradient", "hyprGradientLine", "hyprOuterRadius", "superellipseRectPath", "hyprBorderPath"
+  "spatialNeighborIndex", "BAR_STYLES", "normalizedSettings", "nextBarStyle", "hyprBorderGradient", "hyprGradientLine", "hyprOuterRadius", "superellipseRectPath", "hyprBorderPath", "hyprAnimation", "workspaceSlideLeft", "workspaceSwitchMotion"
 ]
 
 const source = readFileSync(modelUrl, "utf8")
@@ -458,4 +458,56 @@ test("the border ring is the outer and inner outline as one even-odd path", () =
   assert.equal((ring.match(/Z/g) || []).length, 2)
   assert.ok(ring.startsWith(model.superellipseRectPath(0, 0, 100, 60, 13, 2)))
   assert.ok(ring.endsWith(model.superellipseRectPath(4, 4, 92, 52, 9, 2)))
+})
+
+const hyprAnimations = [[
+  { name: "global", overridden: true, bezier: "default", enabled: true, speed: 9.52, style: "" },
+  { name: "workspaces", overridden: true, bezier: "lqMove", enabled: true, speed: 2.44, style: "slide" },
+  { name: "workspacesIn", overridden: false, bezier: "", enabled: true, speed: 0, style: "" },
+  { name: "workspacesOut", overridden: true, bezier: "nope", enabled: false, speed: 1.5, style: "slidefade 20%" }
+], [
+  { name: "lqMove", X0: 0.3, Y0: 0, X1: 0.1, Y1: 1 },
+  { name: "broken", X0: "x", Y0: 0, X1: 0, Y1: 1 }
+]]
+
+test("workspace animations resolve up Hyprland's tree", () => {
+  const plain = (value) => ({ ...value, bezier: Array.from(value.bezier) })
+  assert.deepEqual(plain(model.hyprAnimation(hyprAnimations, "workspacesIn")),
+    { enabled: true, duration: 244, bezier: [0.3, 0, 0.1, 1], style: "slide" })
+  assert.deepEqual(plain(model.hyprAnimation(hyprAnimations, "workspacesOut")),
+    { enabled: false, duration: 150, bezier: [0, 0.75, 0.15, 1], style: "slidefade 20%" })
+  // Nothing overridden: global's built-in defaults.
+  assert.deepEqual(plain(model.hyprAnimation([[{ name: "global", overridden: false }], []], "workspacesIn")),
+    { enabled: true, duration: 800, bezier: [0, 0.75, 0.15, 1], style: "" })
+  assert.deepEqual(plain(model.hyprAnimation(null, "")), { enabled: true, duration: 800, bezier: [0, 0.75, 0.15, 1], style: "" })
+  const broken = [[{ name: "workspaces", overridden: true, bezier: "broken", speed: -1 }], hyprAnimations[1]]
+  assert.deepEqual(plain(model.hyprAnimation(broken, "workspacesIn")),
+    { enabled: true, duration: 0, bezier: [0, 0.75, 0.15, 1], style: "" })
+})
+
+test("the switch direction follows ids, reversed only by wraparound at the ends", () => {
+  assert.equal(model.workspaceSlideLeft(2, 1, [1, 2, 3], false), true)
+  assert.equal(model.workspaceSlideLeft(1, 2, [1, 2, 3], false), false)
+  assert.equal(model.workspaceSlideLeft(3, 1, [1, 2, 3], true), false, "first to last wraps")
+  assert.equal(model.workspaceSlideLeft(2, 1, [1, 2, 3], true), true, "inside the range it does not")
+  assert.equal(model.workspaceSlideLeft(2, 1, [1, 2, -98], true), false, "special workspaces do not count")
+  assert.equal(model.workspaceSlideLeft(4, 3, [1, 2], true), true, "the target counts as open")
+})
+
+test("each style moves its side of the switch as Hyprland's controller does", () => {
+  const m = (...args) => ({ ...model.workspaceSwitchMotion(...args) })
+  assert.deepEqual(m("slide", true, true, 1920, 1080, 0), { fromX: 1920, fromY: 0, toX: 0, toY: 0, fromAlpha: 1, toAlpha: 1 })
+  assert.deepEqual(m("slide", false, true, 1920, 1080, 10), { fromX: 0, fromY: 0, toX: -1930, toY: 0, fromAlpha: 1, toAlpha: 1 })
+  assert.deepEqual(m("", true, false, 1920, 1080, 0), { fromX: -1920, fromY: 0, toX: 0, toY: 0, fromAlpha: 1, toAlpha: 1 })
+  assert.deepEqual(m("slidevert", true, true, 1920, 1080, 0), { fromX: 0, fromY: 1080, toX: 0, toY: 0, fromAlpha: 1, toAlpha: 1 })
+  assert.deepEqual(m("slidefade 20%", true, true, 1920, 1080, 50), { fromX: 384, fromY: 0, toX: 0, toY: 0, fromAlpha: 0, toAlpha: 1 })
+  assert.deepEqual(m("slidefadevert", false, false, 1920, 1080, 0), { fromX: 0, fromY: 0, toX: 0, toY: 1080, fromAlpha: 1, toAlpha: 0 })
+  assert.deepEqual(m("fade", true, true, 1920, 1080, 0), { fromX: 0, fromY: 0, toX: 0, toY: 0, fromAlpha: 0, toAlpha: 1 })
+  assert.deepEqual(m("fade", false, true, 1920, 1080, 0), { fromX: 0, fromY: 0, toX: 0, toY: 0, fromAlpha: 1, toAlpha: 0 })
+  assert.deepEqual(m("fade 50%", true, true, 1000, 500, 0), { fromX: 500, fromY: 0, toX: 0, toY: 0, fromAlpha: 1, toAlpha: 1 }, "only bare fade fades")
+  assert.deepEqual(m("slide top", true, true, 1920, 1080, 0), { fromX: 0, fromY: -1080, toX: 0, toY: 0, fromAlpha: 1, toAlpha: 1 })
+  assert.deepEqual(m("slide bottom", true, false, 1920, 1080, 0), { fromX: 0, fromY: 1080, toX: 0, toY: 0, fromAlpha: 1, toAlpha: 1 })
+  assert.deepEqual(m("slidevert left", true, true, 1920, 1080, 0), { fromX: -1920, fromY: 0, toX: 0, toY: 0, fromAlpha: 1, toAlpha: 1 })
+  assert.deepEqual(m("slide right", false, false, 1920, 1080, 0), { fromX: 0, fromY: 0, toX: -1920, toY: 0, fromAlpha: 1, toAlpha: 1 })
+  assert.deepEqual(m("slide x%", true, true, 100, 100, "g"), { fromX: 100, fromY: 0, toX: 0, toY: 0, fromAlpha: 1, toAlpha: 1 })
 })

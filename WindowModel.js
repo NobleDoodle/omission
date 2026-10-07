@@ -315,6 +315,101 @@ function hyprBorderPath(w, h, innerRadius, thickness, power) {
       height - 2 * border, innerRadius, power)
 }
 
+// Hyprland's animation tree for the workspace leaves: a node that is not
+// overridden takes its parent's whole config, up to global (enabled, speed 8,
+// the "default" curve). Speed is in deciseconds.
+var HYPR_ANIMATION_PARENTS = {
+  workspacesIn: "workspaces", workspacesOut: "workspaces", workspaces: "global"
+}
+var HYPR_DEFAULT_BEZIER = [0, 0.75, 0.15, 1]
+
+// One animation leaf as Hyprland resolves it, from `hyprctl -j animations`
+// ([leaves, beziers]): enabled, duration in ms, cubic bezier control points
+// [x1, y1, x2, y2], and style.
+function hyprAnimation(animations, name) {
+  var data = Array.isArray(animations) ? animations : []
+  var leaves = Array.isArray(data[0]) ? data[0] : []
+  var curves = Array.isArray(data[1]) ? data[1] : []
+  function leaf(leafName) {
+    for (var i = 0; i < leaves.length; i++)
+      if (leaves[i] && leaves[i].name === leafName) return leaves[i]
+    return null
+  }
+  var node = null
+  for (var current = String(name || ""); current; current = HYPR_ANIMATION_PARENTS[current] || "") {
+    var entry = leaf(current)
+    if (entry && entry.overridden) { node = entry; break }
+  }
+  var bezierName = node && node.bezier ? String(node.bezier) : "default"
+  var bezier = HYPR_DEFAULT_BEZIER
+  for (var c = 0; c < curves.length; c++) {
+    var curve = curves[c]
+    if (!curve || curve.name !== bezierName) continue
+    var points = [curve.X0, curve.Y0, curve.X1, curve.Y1].map(function(value) { return numberOr(value, NaN) })
+    if (points.every(isFinite)) bezier = points
+  }
+  return {
+    enabled: node ? node.enabled !== false : true,
+    duration: Math.max(0, numberOr(node ? node.speed : 8, 8) * 100),
+    bezier: bezier,
+    style: node ? String(node.style || "") : ""
+  }
+}
+
+// Whether Hyprland moves the new workspace in from the right ("left" in its
+// code): by id order, reversed by animations:workspace_wraparound when the
+// switch is between the lowest and highest open workspaces.
+function workspaceSlideLeft(newId, oldId, openIds, wraparound) {
+  var next = numberOr(newId, 0)
+  var previous = numberOr(oldId, 0)
+  var wrap = false
+  if (wraparound) {
+    var ids = valuesOf(openIds).map(function(id) { return numberOr(id, -1) })
+      .filter(function(id) { return id > 0 })
+    ids.push(next, previous)
+    wrap = Math.min(next, previous) === Math.min.apply(null, ids)
+      && Math.max(next, previous) === Math.max.apply(null, ids)
+  }
+  return wrap !== (next > previous)
+}
+
+// One side of Hyprland's workspace switch for a style: the start and end of
+// its offset and alpha. Ported from Animation::Workspace::startAnimation:
+// slide / slidevert travel the screen plus gaps_workspaces, slidefade(vert)
+// travels the screen and fades, fade only fades; "slide top|bottom|left|right"
+// fixes the direction and a trailing "N%" scales the distance.
+function workspaceSwitchMotion(style, entering, left, width, height, gap) {
+  var text = String(style || "").trim()
+  var args = text.split(/\s+/)
+  var vertical = text.indexOf("slidevert") === 0 || text.indexOf("slidefadevert") === 0
+  var fromLeft = !!left
+  if (args.length > 1) {
+    if (args[1] === "top") { fromLeft = false; vertical = true }
+    else if (args[1] === "bottom") { fromLeft = true; vertical = true }
+    else if (args[1] === "left") { fromLeft = false; vertical = false }
+    else if (args[1] === "right") { fromLeft = true; vertical = false }
+  }
+  var percent = 100
+  var last = args[args.length - 1]
+  if (/%$/.test(last) && isFinite(parseInt(last, 10))) percent = parseInt(last, 10)
+  var span = vertical ? Math.max(0, numberOr(height, 0)) : Math.max(0, numberOr(width, 0))
+  var fade = text.indexOf("slidefade") === 0
+  var distance = text === "fade" ? 0
+    : (fade ? span : span + Math.max(0, numberOr(gap, 0))) * percent / 100
+  var sign = fromLeft ? 1 : -1
+  var away = (entering ? sign * distance : -sign * distance) || 0
+  var fades = fade || text === "fade"
+  var motion = { fromX: 0, fromY: 0, toX: 0, toY: 0, fromAlpha: 1, toAlpha: 1 }
+  if (entering) {
+    motion[vertical ? "fromY" : "fromX"] = away
+    if (fades) motion.fromAlpha = 0
+  } else {
+    motion[vertical ? "toY" : "toX"] = away
+    if (fades) motion.toAlpha = 0
+  }
+  return motion
+}
+
 var BAR_STYLES = ["numbers", "dots", "pills", "lines"]
 
 // Omission's own settings (omission-settings.json), chosen in the overview:
