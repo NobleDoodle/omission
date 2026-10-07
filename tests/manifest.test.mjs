@@ -5,10 +5,10 @@ import { test } from "node:test"
 const root = new URL("../", import.meta.url)
 const manifest = JSON.parse(readFileSync(new URL("manifest.json", root), "utf8"))
 
-test("manifest publishes the Omission v1.0.1 plugin", () => {
+test("manifest publishes the Omission v1.1.0 plugin", () => {
   assert.equal(manifest.schemaVersion, 1)
   assert.equal(manifest.id, "io.github.nobledoodle.omission")
-  assert.equal(manifest.version, "1.0.1")
+  assert.equal(manifest.version, "1.1.0")
   assert.deepEqual(manifest.kinds, ["overlay", "service", "bar-widget"])
   assert.equal(manifest.keepLoaded, true)
   assert.equal(manifest.barWidget.defaultSection, "left")
