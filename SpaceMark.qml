@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 
 // One space drawn in a bar indicator style. The bar widget wraps it in a
 // button; the overview's settings panel draws it as that style's preview.
@@ -12,9 +13,9 @@ Item {
   property bool focused: false
   property bool occupied: false
   property string label: ""
-  property color foreground: Color.foreground
-  property color accent: Color.accent
-  property color accentText: Color.background
+  property color foreground: Commons.Color.foreground
+  property color accent: Commons.Color.accent
+  property color accentText: Commons.Color.background
   property string fontFamily: Style.font.family
   property real fontSize: Style.font.body
   property bool vertical: false

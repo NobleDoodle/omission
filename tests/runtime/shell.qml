@@ -1,6 +1,7 @@
 import QtQuick
 import Quickshell
 import qs.Commons
+import qs.Commons as Commons
 import "plugin" as Plugin
 
 ShellRoot {
@@ -140,13 +141,13 @@ ShellRoot {
     interval: 500
     repeat: false
     onTriggered: {
-      root.originalShellValues = Color.shellValues
-      root.originalThemeShellValues = Color.themeShellValues
-      root.originalUserShellValues = Color.userShellValues
-      root.originalBackground = Color.background
-      Color.themeShellValues = ({ "menu.background": "#123456" })
-      Color.userShellValues = ({})
-      Color.mergeShell()
+      root.originalShellValues = Commons.Color.shellValues
+      root.originalThemeShellValues = Commons.Color.themeShellValues
+      root.originalUserShellValues = Commons.Color.userShellValues
+      root.originalBackground = Commons.Color.background
+      Commons.Color.themeShellValues = ({ "menu.background": "#123456" })
+      Commons.Color.userShellValues = ({})
+      Commons.Color.mergeShell()
       Qt.callLater(root.finishThemeCheck)
     }
   }
@@ -158,10 +159,10 @@ ShellRoot {
       "switcher background did not react to theme token mutation (got " + switcherColor + ")")
     root.check(controlColor.indexOf("123456") >= 0,
       "Omission background did not react to theme token mutation (got " + controlColor + ")")
-    Color.background = root.originalBackground
-    Color.themeShellValues = root.originalThemeShellValues || ({})
-    Color.userShellValues = root.originalUserShellValues || ({})
-    Color.mergeShell()
+    Commons.Color.background = root.originalBackground
+    Commons.Color.themeShellValues = root.originalThemeShellValues || ({})
+    Commons.Color.userShellValues = root.originalUserShellValues || ({})
+    Commons.Color.mergeShell()
     root.overlay.cancel("theme-check")
     root.check(root.parsedSwitcherStatus().open === false, "cancel did not close switcher")
     if (!root.failed) console.log("OMISSION_RUNTIME_SMOKE_PASS")

@@ -6,11 +6,12 @@ shell_qml="$plugin_dir/tests/runtime/shell.qml"
 shell_root=/usr/share/omarchy/shell
 
 command -v quickshell >/dev/null 2>&1 || { echo "runtime smoke: quickshell not found" >&2; exit 1; }
-[[ -d $shell_root/Commons ]] || { echo "runtime smoke: Omarchy Commons missing" >&2; exit 1; }
+[[ -d $shell_root/Commons && -d $shell_root/Ui ]] || { echo "runtime smoke: Omarchy Commons/Ui missing" >&2; exit 1; }
 
 tmp=$(mktemp -d) || exit 1
 trap 'rm -rf "$tmp"' EXIT
 ln -s "$shell_root/Commons" "$tmp/Commons"
+ln -s "$shell_root/Ui" "$tmp/Ui"
 ln -s "$plugin_dir" "$tmp/plugin"
 ln -s "$shell_qml" "$tmp/shell.qml"
 

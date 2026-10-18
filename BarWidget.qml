@@ -3,6 +3,7 @@ import QtQuick.Layouts
 import Quickshell.Hyprland
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "WindowModel.js" as WindowModel
 
@@ -152,7 +153,7 @@ BarWidget {
           focused: spaceButton.focused && spaceButton.ready
           occupied: spaceButton.occupied
           label: spaceButton.customName || spaceButton.numberLabel
-          foreground: root.bar ? root.bar.barForeground : Color.foreground
+          foreground: root.bar ? root.bar.barForeground : Commons.Color.foreground
           fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
           vertical: root.vertical
         }

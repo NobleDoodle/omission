@@ -5,6 +5,7 @@ import Quickshell
 import Quickshell.Hyprland
 import Quickshell.Wayland
 import qs.Commons
+import qs.Commons as Commons
 import "SwitcherModel.js" as SwitcherModel
 
 Item {
@@ -32,11 +33,11 @@ Item {
   readonly property var trustedEnvironment: ({ PATH: root.trustedPath })
   property string modelError: ""
 
-  readonly property color transparentColor: Util.alpha(Color.background, 0)
-  readonly property color backgroundColor: Color.menu.background
-  readonly property color foregroundColor: Color.menu.text
-  readonly property color borderColor: Color.menu.border
-  readonly property color scrimColor: Color.menu.scrim
+  readonly property color transparentColor: Util.alpha(Commons.Color.background, 0)
+  readonly property color backgroundColor: Commons.Color.menu.background
+  readonly property color foregroundColor: Commons.Color.menu.text
+  readonly property color borderColor: Commons.Color.menu.border
+  readonly property color scrimColor: Commons.Color.menu.scrim
   readonly property color surfaceTopColor: Util.alpha(
     backgroundColor, Math.min(0.82, Math.max(backgroundColor.a, 0.74)))
   readonly property color surfaceBottomColor: Util.alpha(
@@ -44,18 +45,18 @@ Item {
   readonly property color surfaceBorderColor: Util.alpha(
     borderColor, Math.max(borderColor.a, 0.55))
   readonly property color surfaceInnerBorderColor: Util.alpha(foregroundColor, 0.10)
-  readonly property color panelShadowColor: Util.alpha(Color.background, 0.52)
-  readonly property color selectedColor: Util.alpha(Color.menu.selectedBackground, 0.20)
+  readonly property color panelShadowColor: Util.alpha(Commons.Color.background, 0.52)
+  readonly property color selectedColor: Util.alpha(Commons.Color.menu.selectedBackground, 0.20)
   readonly property color selectedTextColor: foregroundColor
   readonly property color selectedSecondaryTextColor: Util.alpha(foregroundColor, 0.68)
   readonly property color selectedBorderColor: Util.alpha(
-    Color.menu.selectedBorder.a > 0 ? Color.menu.selectedBorder : foregroundColor, 0.85)
+    Commons.Color.menu.selectedBorder.a > 0 ? Commons.Color.menu.selectedBorder : foregroundColor, 0.85)
   readonly property color secondaryTextColor: Util.alpha(foregroundColor, 0.62)
   readonly property color idleCardColor: Style.normalFillFor(foregroundColor, selectedTextColor)
   readonly property color hoverCardColor: Style.hoverFillFor(foregroundColor, selectedTextColor)
   readonly property color idleCardBorderColor: Style.normalBorderFor(foregroundColor, selectedTextColor)
   readonly property color hoverCardBorderColor: Style.hoverBorderFor(foregroundColor, selectedTextColor)
-  readonly property color iconShadowColor: Util.alpha(Color.background, 0.48)
+  readonly property color iconShadowColor: Util.alpha(Commons.Color.background, 0.48)
   // The whole switcher is drawn at 80% of its natural size.
   readonly property real uiScale: 0.8
   readonly property real displayScale: root.uiScale * Math.max(1, Math.min(1.6,
@@ -620,7 +621,7 @@ Item {
           Text {
             anchors.verticalCenter: parent.verticalCenter
             text: "󰅚"
-            color: Color.urgent
+            color: Commons.Color.urgent
             font.family: Style.font.menuFamily
             font.pixelSize: Math.round(Style.font.displayLarge * root.displayScale)
           }

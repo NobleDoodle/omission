@@ -36,7 +36,7 @@ test("the space strip spans the screen over a cached blur of the wallpaper", () 
   assert.match(rail, /width: parent\.width/)
   assert.match(rail, /y: -height \* \(1 - root\.revealProgress\)/)
   assert.match(rail, /MultiEffect \{[\s\S]*?source: wallpaperSource[\s\S]*?blurEnabled: true[\s\S]*?layer\.enabled: true/)
-  assert.match(rail, /color: Util\.alpha\(Color\.background, 0\.85\)/, "tinted with the theme's own background")
+  assert.match(rail, /color: Util\.alpha\(Commons\.Color\.background, 0\.85\)/, "tinted with the theme's own background")
 })
 
 test("windows move from their real place to the tiled stage, bare and rounded", () => {

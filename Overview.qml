@@ -7,6 +7,7 @@ import Quickshell.Io
 import Quickshell.Wayland
 import Quickshell.Widgets
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui as Ui
 import "WindowModel.js" as WindowModel
 import "SwitcherModel.js" as SwitcherModel
@@ -87,13 +88,13 @@ Item {
     && sharedVideoOutput.sourceRect.height > 0
 
 
-  readonly property color backgroundColor: Color.menu.background
-  readonly property color foregroundColor: Color.menu.text
-  readonly property color borderColor: Color.menu.border
-  readonly property color scrimColor: Color.menu.scrim
-  readonly property color selectedColor: Color.menu.selectedBackground
-  readonly property color selectedTextColor: Color.menu.selectedText
-  readonly property color selectedBorderColor: Color.menu.selectedBorder
+  readonly property color backgroundColor: Commons.Color.menu.background
+  readonly property color foregroundColor: Commons.Color.menu.text
+  readonly property color borderColor: Commons.Color.menu.border
+  readonly property color scrimColor: Commons.Color.menu.scrim
+  readonly property color selectedColor: Commons.Color.menu.selectedBackground
+  readonly property color selectedTextColor: Commons.Color.menu.selectedText
+  readonly property color selectedBorderColor: Commons.Color.menu.selectedBorder
   // The overview takes the desktop's place in a single frame and only then
   // moves. It stays transparent until every window card holds its first
   // capture and the wallpaper has decoded (never longer than the give-up
@@ -1655,7 +1656,7 @@ Item {
 
           Rectangle {
             anchors.fill: parent
-            color: Util.alpha(Color.background, 0.85)
+            color: Util.alpha(Commons.Color.background, 0.85)
           }
 
           Row {
